@@ -24,13 +24,24 @@ pub fn main() !void {
         try list2.append(value2);
     }
 
-    std.mem.sort(i32, list1.items, {}, std.sort.asc(i32));
-    std.mem.sort(i32, list2.items, {}, std.sort.asc(i32));
+    var similarity_map = std.AutoArrayHashMap(i32, i32).init(alloc);
+    defer similarity_map.deinit();
 
-    var sum: u32 = 0;
+    for (list2.items) |val| {
+        if (similarity_map.get(val)) |old_val| {
+            try similarity_map.put(val, old_val + 1);
+        } else {
+            try similarity_map.put(val, 1);
+        }
+    }
 
-    for (list1.items, list2.items) |value1, value2| {
-        sum += @abs(value1 - value2);
+    var sum: i32 = 0;
+
+    for (list1.items) |value| {
+        const similarity = similarity_map.get(value) orelse 0;
+        sum += value * similarity;
+        std.log.info("Adding {} to sum", .{value * similarity});
+        std.log.info("Value: {}\tSimilarity: {}", .{ value, similarity });
     }
 
     std.log.info("{}", .{sum});
