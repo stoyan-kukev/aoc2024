@@ -7,42 +7,60 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
-    var list1 = try std.ArrayList(i32).initCapacity(alloc, 1000);
-    defer list1.deinit();
-
-    var list2 = try std.ArrayList(i32).initCapacity(alloc, 1000);
-    defer list2.deinit();
+    var levels = try std.ArrayList([]i32).initCapacity(alloc, 1000);
+    defer {
+        for (levels.items) |level| {
+            alloc.free(level);
+        }
+        levels.deinit();
+    }
 
     var iter = std.mem.splitSequence(u8, input, "\n");
     while (iter.next()) |line| {
-        var inner_iter = std.mem.splitSequence(u8, line, "   ");
-        const val1 = inner_iter.next() orelse continue;
-        const val2 = inner_iter.next() orelse continue;
-        const value1 = std.fmt.parseUnsigned(i32, val1, 10) catch continue;
-        const value2 = std.fmt.parseUnsigned(i32, val2, 10) catch continue;
-        try list1.append(value1);
-        try list2.append(value2);
-    }
+        var values = try std.ArrayList(i32).initCapacity(alloc, 10);
+        defer values.deinit();
 
-    var similarity_map = std.AutoArrayHashMap(i32, i32).init(alloc);
-    defer similarity_map.deinit();
+        var inner_iter = std.mem.splitScalar(u8, line, ' ');
+        while (inner_iter.next()) |item| {
+            const value = std.fmt.parseInt(i32, item, 10) catch continue;
+            try values.append(value);
+        }
 
-    for (list2.items) |val| {
-        if (similarity_map.get(val)) |old_val| {
-            try similarity_map.put(val, old_val + 1);
-        } else {
-            try similarity_map.put(val, 1);
+        if (values.items.len > 0) {
+            try levels.append(try alloc.dupe(i32, values.items));
         }
     }
 
-    var sum: i32 = 0;
+    var safe_levels: u32 = 0;
 
-    for (list1.items) |value| {
-        const similarity = similarity_map.get(value) orelse 0;
-        sum += value * similarity;
-        std.log.info("Adding {} to sum", .{value * similarity});
-        std.log.info("Value: {}\tSimilarity: {}", .{ value, similarity });
+    for (levels.items) |values| {
+        if (values.len <= 1) continue;
+
+        var is_increasing: ?bool = null;
+        var is_safe = true;
+
+        for (1..values.len) |current| {
+            const diff = values[current] - values[current - 1];
+
+            if (@abs(diff) < 1 or @abs(diff) > 3) {
+                is_safe = false;
+                break;
+            }
+
+            if (is_increasing == null) {
+                is_increasing = diff > 0;
+            } else {
+                if ((is_increasing.? and diff < 0) or (!is_increasing.? and diff > 0)) {
+                    is_safe = false;
+                    break;
+                }
+            }
+        }
+
+        if (is_safe) {
+            safe_levels += 1;
+        }
     }
 
-    std.log.info("{}", .{sum});
+    std.log.info("Safe levels: {}", .{safe_levels});
 }
