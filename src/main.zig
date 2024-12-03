@@ -4,10 +4,15 @@ const input = @embedFile("input.txt");
 
 pub fn main() !void {
     var sum: u64 = 0;
+    var mul_enabled = true;
 
     var i: usize = 0;
     while (i < input.len) : (i += 1) {
-        if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "mul(")) {
+        if (i + 4 < input.len and std.mem.startsWith(u8, input[i..], "do()")) {
+            mul_enabled = true;
+        } else if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "don't()")) {
+            mul_enabled = false;
+        } else if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "mul(") and mul_enabled) {
             var j = i + 4; // start after mul(
             const first_num_start = j;
             var first_num_end = j;
