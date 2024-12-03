@@ -2,88 +2,43 @@ const std = @import("std");
 
 const input = @embedFile("input.txt");
 
-fn isSequenceSafe(values: []const i32) bool {
-    if (values.len <= 1) return false;
-
-    var is_increasing: ?bool = null;
-
-    for (1..values.len) |current| {
-        const diff = values[current] - values[current - 1];
-
-        if (@abs(diff) < 1 or @abs(diff) > 3) {
-            return false;
-        }
-
-        if (is_increasing) |increasing| {
-            if ((increasing and diff < 0) or (!increasing and diff > 0)) {
-                return false;
-            }
-        } else {
-            is_increasing = diff > 0;
-        }
-    }
-
-    return true;
-}
-
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    var sum: u64 = 0;
 
-    var levels = try std.ArrayList([]i32).initCapacity(alloc, 1000);
-    defer {
-        for (levels.items) |level| {
-            alloc.free(level);
-        }
-        levels.deinit();
-    }
+    var i: usize = 0;
+    while (i < input.len) : (i += 1) {
+        if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "mul(")) {
+            var j = i + 4; // start after mul(
+            const first_num_start = j;
+            var first_num_end = j;
+            var second_num_start: usize = undefined;
+            var second_num_end: usize = undefined;
 
-    var iter = std.mem.splitSequence(u8, input, "\n");
-    while (iter.next()) |line| {
-        var values = try std.ArrayList(i32).initCapacity(alloc, 10);
-        defer values.deinit();
+            var digit_count: u8 = 0;
+            while (j < input.len and digit_count < 3 and input[j] >= '0' and input[j] <= '9') : (j += 1) {
+                first_num_end = j + 1;
+                digit_count += 1;
+            }
 
-        var inner_iter = std.mem.splitScalar(u8, line, ' ');
-        while (inner_iter.next()) |item| {
-            const value = std.fmt.parseInt(i32, item, 10) catch continue;
-            try values.append(value);
-        }
+            if (j < input.len and input[j] == ',') {
+                second_num_start = j + 1;
+                j += 1;
+                digit_count = 0;
 
-        if (values.items.len > 0) {
-            try levels.append(try alloc.dupe(i32, values.items));
-        }
-    }
+                while (j < input.len and digit_count < 3 and input[j] >= '0' and input[j] <= '9') : (j += 1) {
+                    second_num_end = j + 1;
+                    digit_count += 1;
+                }
 
-    var safe_levels: u32 = 0;
+                if (j < input.len and input[j] == ')' and first_num_end > first_num_start and second_num_end > second_num_start) {
+                    const first_num = try std.fmt.parseInt(u32, input[first_num_start..first_num_end], 10);
+                    const second_num = try std.fmt.parseInt(u32, input[second_num_start..second_num_end], 10);
 
-    for (levels.items) |values| {
-        if (isSequenceSafe(values)) {
-            safe_levels += 1;
-            continue;
-        }
-
-        var is_safe_dampened = false;
-        for (0..values.len) |skip_index| {
-            var test_values = std.ArrayList(i32).init(alloc);
-            defer test_values.deinit();
-
-            for (0..values.len) |i| {
-                if (i != skip_index) {
-                    try test_values.append(values[i]);
+                    sum += first_num * second_num;
                 }
             }
-
-            if (isSequenceSafe(test_values.items)) {
-                is_safe_dampened = true;
-                break;
-            }
-        }
-
-        if (is_safe_dampened) {
-            safe_levels += 1;
         }
     }
 
-    std.log.info("Safe levels with Problem Dampner: {}", .{safe_levels});
+    std.log.info("Sum: {}", .{sum});
 }
