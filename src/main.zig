@@ -1,49 +1,119 @@
 const std = @import("std");
-
 const input = @embedFile("input.txt");
 
-pub fn main() !void {
-    var sum: u64 = 0;
-    var mul_enabled = true;
+const Direction = enum {
+    Horizontal,
+    Vertical,
+    DiagonalLeft,
+    DiagonalRight,
+};
 
-    var i: usize = 0;
-    while (i < input.len) : (i += 1) {
-        if (i + 4 < input.len and std.mem.startsWith(u8, input[i..], "do()")) {
-            mul_enabled = true;
-        } else if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "don't()")) {
-            mul_enabled = false;
-        } else if (i + 7 < input.len and std.mem.startsWith(u8, input[i..], "mul(") and mul_enabled) {
-            var j = i + 4; // start after mul(
-            const first_num_start = j;
-            var first_num_end = j;
-            var second_num_start: usize = undefined;
-            var second_num_end: usize = undefined;
+fn splitStringToGrid(allocator: std.mem.Allocator, string: []const u8) ![][]const u8 {
+    var result = std.ArrayList([]const u8).init(allocator);
+    defer result.deinit();
 
-            var digit_count: u8 = 0;
-            while (j < input.len and digit_count < 3 and input[j] >= '0' and input[j] <= '9') : (j += 1) {
-                first_num_end = j + 1;
-                digit_count += 1;
-            }
+    var lines = std.mem.splitSequence(u8, string, "\n");
 
-            if (j < input.len and input[j] == ',') {
-                second_num_start = j + 1;
-                j += 1;
-                digit_count = 0;
+    while (lines.next()) |line| {
+        if (line.len > 0) {
+            try result.append(line);
+        }
+    }
 
-                while (j < input.len and digit_count < 3 and input[j] >= '0' and input[j] <= '9') : (j += 1) {
-                    second_num_end = j + 1;
-                    digit_count += 1;
-                }
+    return result.toOwnedSlice();
+}
 
-                if (j < input.len and input[j] == ')' and first_num_end > first_num_start and second_num_end > second_num_start) {
-                    const first_num = try std.fmt.parseInt(u32, input[first_num_start..first_num_end], 10);
-                    const second_num = try std.fmt.parseInt(u32, input[second_num_start..second_num_end], 10);
+fn checkSequenceFromPoint(
+    grid: [][]const u8,
+    sequence: []const u8,
+    start_row: usize,
+    start_col: usize,
+    direction: Direction,
+    reverse: bool,
+) bool {
+    const height = grid.len;
+    const width = grid[0].len;
 
-                    sum += first_num * second_num;
-                }
+    const row_step: i2 = switch (direction) {
+        .Horizontal => 0,
+        else => 1,
+    };
+
+    const col_step: i2 = switch (direction) {
+        .Horizontal => 1,
+        .Vertical => 0,
+        .DiagonalRight => 1,
+        .DiagonalLeft => -1,
+    };
+
+    const sign: i2 = if (reverse) -1 else 1;
+
+    const last_row = @as(i32, @intCast(start_row)) + sign * @as(i32, @intCast(row_step)) * @as(i32, @intCast(sequence.len - 1));
+    const last_col = @as(i32, @intCast(start_col)) + sign * @as(i32, @intCast(col_step)) * @as(i32, @intCast(sequence.len - 1));
+
+    if (last_row < 0 or last_row >= @as(i32, @intCast(height)) or
+        last_col < 0 or last_col >= @as(i32, @intCast(width)))
+    {
+        return false;
+    }
+
+    for (0..sequence.len) |i| {
+        const check_row = @as(usize, @intCast(@as(i32, @intCast(start_row)) + sign * @as(i32, @intCast(row_step)) * @as(i32, @intCast(i))));
+        const check_col = @as(usize, @intCast(@as(i32, @intCast(start_col)) + sign * @as(i32, @intCast(col_step)) * @as(i32, @intCast(i))));
+        if (grid[check_row][check_col] != sequence[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+fn checkDirection(
+    grid: [][]const u8,
+    sequence: []const u8,
+    direction: Direction,
+    reverse: bool,
+) u32 {
+    const height = grid.len;
+    const width = grid[0].len;
+
+    var count: u32 = 0;
+    for (0..height) |row| {
+        for (0..width) |col| {
+            if (checkSequenceFromPoint(grid, sequence, row, col, direction, reverse)) {
+                count += 1;
             }
         }
     }
 
-    std.log.info("Sum: {}", .{sum});
+    return count;
+}
+
+fn findSequenceCount(grid: [][]const u8, sequence: []const u8) u32 {
+    const directions = [_]Direction{
+        .Horizontal,
+        .Vertical,
+        .DiagonalLeft,
+        .DiagonalRight,
+    };
+
+    var count: u32 = 0;
+    for (directions) |direction| {
+        count += checkDirection(grid, sequence, direction, false);
+        count += checkDirection(grid, sequence, direction, true);
+    }
+
+    return count;
+}
+
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const grid = try splitStringToGrid(allocator, input);
+    defer allocator.free(grid);
+
+    const count = findSequenceCount(grid, "XMAS");
+    std.debug.print("XMAS spotted {} times\n", .{count});
 }
