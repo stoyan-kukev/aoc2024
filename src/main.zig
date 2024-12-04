@@ -1,12 +1,6 @@
 const std = @import("std");
-const input = @embedFile("input.txt");
 
-const Direction = enum {
-    Horizontal,
-    Vertical,
-    DiagonalLeft,
-    DiagonalRight,
-};
+const input = @embedFile("input.txt");
 
 fn splitStringToGrid(allocator: std.mem.Allocator, string: []const u8) ![][]const u8 {
     var result = std.ArrayList([]const u8).init(allocator);
@@ -23,87 +17,52 @@ fn splitStringToGrid(allocator: std.mem.Allocator, string: []const u8) ![][]cons
     return result.toOwnedSlice();
 }
 
-fn checkSequenceFromPoint(
-    grid: [][]const u8,
-    sequence: []const u8,
-    start_row: usize,
-    start_col: usize,
-    direction: Direction,
-    reverse: bool,
-) bool {
-    const height = grid.len;
-    const width = grid[0].len;
-
-    const row_step: i2 = switch (direction) {
-        .Horizontal => 0,
-        else => 1,
-    };
-
-    const col_step: i2 = switch (direction) {
-        .Horizontal => 1,
-        .Vertical => 0,
-        .DiagonalRight => 1,
-        .DiagonalLeft => -1,
-    };
-
-    const sign: i2 = if (reverse) -1 else 1;
-
-    const last_row = @as(i32, @intCast(start_row)) + sign * @as(i32, @intCast(row_step)) * @as(i32, @intCast(sequence.len - 1));
-    const last_col = @as(i32, @intCast(start_col)) + sign * @as(i32, @intCast(col_step)) * @as(i32, @intCast(sequence.len - 1));
-
-    if (last_row < 0 or last_row >= @as(i32, @intCast(height)) or
-        last_col < 0 or last_col >= @as(i32, @intCast(width)))
-    {
-        return false;
-    }
-
-    for (0..sequence.len) |i| {
-        const check_row = @as(usize, @intCast(@as(i32, @intCast(start_row)) + sign * @as(i32, @intCast(row_step)) * @as(i32, @intCast(i))));
-        const check_col = @as(usize, @intCast(@as(i32, @intCast(start_col)) + sign * @as(i32, @intCast(col_step)) * @as(i32, @intCast(i))));
-        if (grid[check_row][check_col] != sequence[i]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-fn checkDirection(
-    grid: [][]const u8,
-    sequence: []const u8,
-    direction: Direction,
-    reverse: bool,
-) u32 {
+fn countXMASPatterns(grid: [][]const u8) u32 {
     const height = grid.len;
     const width = grid[0].len;
 
     var count: u32 = 0;
-    for (0..height) |row| {
-        for (0..width) |col| {
-            if (checkSequenceFromPoint(grid, sequence, row, col, direction, reverse)) {
-                count += 1;
-            }
+
+    for (1..height - 1) |row| {
+        for (1..width - 1) |col| {
+            // Check center
+            if (grid[row][col] != 'A') continue;
+
+            // Check all combinations for both diagonals
+            const diagonal1 = checkDiagonal(grid, row, col, -1, -1, 1, 1);
+            const diagonal2 = checkDiagonal(grid, row, col, -1, 1, 1, -1);
+
+            if (diagonal1 and diagonal2) count += 1;
         }
     }
 
     return count;
 }
 
-fn findSequenceCount(grid: [][]const u8, sequence: []const u8) u32 {
-    const directions = [_]Direction{
-        .Horizontal,
-        .Vertical,
-        .DiagonalLeft,
-        .DiagonalRight,
-    };
+fn checkDiagonal(grid: [][]const u8, row: usize, col: usize, dx1: isize, dy1: isize, dx2: isize, dy2: isize) bool {
+    const height = grid.len;
+    const width = grid[0].len;
 
-    var count: u32 = 0;
-    for (directions) |direction| {
-        count += checkDirection(grid, sequence, direction, false);
-        count += checkDirection(grid, sequence, direction, true);
-    }
+    // Calculate first diagonal arm position
+    const x1 = @as(isize, @intCast(row)) + dx1;
+    const y1 = @as(isize, @intCast(col)) + dy1;
 
-    return count;
+    // Calculate second diagonal arm position
+    const x2 = @as(isize, @intCast(row)) + dx2;
+    const y2 = @as(isize, @intCast(col)) + dy2;
+
+    // Ensure indices are within bounds
+    if (x1 < 0 or x1 >= @as(isize, @intCast(height))) return false;
+    if (y1 < 0 or y1 >= @as(isize, @intCast(width))) return false;
+    if (x2 < 0 or x2 >= @as(isize, @intCast(height))) return false;
+    if (y2 < 0 or y2 >= @as(isize, @intCast(width))) return false;
+
+    // Retrieve values at diagonal positions
+    const first = grid[@as(usize, @intCast(x1))][@as(usize, @intCast(y1))];
+    const last = grid[@as(usize, @intCast(x2))][@as(usize, @intCast(y2))];
+
+    // Valid if it forms either MAS or SAM
+    return (first == 'M' and last == 'S') or (first == 'S' and last == 'M');
 }
 
 pub fn main() !void {
@@ -114,6 +73,6 @@ pub fn main() !void {
     const grid = try splitStringToGrid(allocator, input);
     defer allocator.free(grid);
 
-    const count = findSequenceCount(grid, "XMAS");
-    std.debug.print("XMAS spotted {} times\n", .{count});
+    const count = countXMASPatterns(grid);
+    std.debug.print("X-MAS patterns spotted: {}\n", .{count});
 }
