@@ -1,12 +1,73 @@
 const std = @import("std");
 const input = @embedFile("input.txt");
 
+const DAG = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    adj_list: std.AutoArrayHashMap(u32, std.ArrayList(u32)),
+
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        return Self{
+            .allocator = allocator,
+            .adj_list = std.AutoArrayHashMap(u32, std.ArrayList(u32)).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        var it = self.adj_list.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.adj_list.deinit();
+    }
+
+    pub fn addEdge(self: *Self, from: u32, to: u32) !void {
+        const adj_list = &self.adj_list;
+
+        if (!adj_list.contains(from)) {
+            try adj_list.put(from, std.ArrayList(u32).init(self.allocator));
+        }
+
+        if (!adj_list.contains(to)) {
+            try adj_list.put(to, std.ArrayList(u32).init(self.allocator));
+        }
+
+        try adj_list.getPtr(from).?.append(to);
+    }
+
+    pub fn topologicalSort(self: *Self, input_sequence: []const u32) ![]u32 {
+        var sorted_sequence = try self.allocator.dupe(u32, input_sequence);
+
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (0..sorted_sequence.len) |i| {
+                for (0..sorted_sequence.len) |j| {
+                    if (i < j) {
+                        if (self.adj_list.get(sorted_sequence[j])) |neighbors| {
+                            for (neighbors.items) |neighbor| {
+                                if (neighbor == sorted_sequence[i]) {
+                                    // Swap to respect dependency
+                                    std.mem.swap(u32, &sorted_sequence[i], &sorted_sequence[j]);
+                                    changed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return sorted_sequence;
+    }
+};
+
 const Input = struct {
     page_restrictions: []const u8,
     page_order: []const u8,
 };
-
-const PageRestrictions = std.AutoArrayHashMap(u32, std.ArrayList(u32));
 
 fn processInput(string: []const u8) Input {
     var lines = std.mem.splitSequence(u8, string, "\n\n");
@@ -23,23 +84,18 @@ fn processInput(string: []const u8) Input {
 fn processPageRestrictions(
     allocator: std.mem.Allocator,
     page_restrictions: []const u8,
-) !std.AutoArrayHashMap(u32, std.ArrayList(u32)) {
-    var output = PageRestrictions.init(allocator);
+) !DAG {
+    var output = try DAG.init(allocator);
     var iter = std.mem.splitSequence(u8, page_restrictions, "\n");
 
     while (iter.next()) |line| {
+        if (line.len == 0) continue; // Skip empty lines
         var inner_iter = std.mem.splitSequence(u8, line, "|");
 
         const key = try std.fmt.parseInt(u32, inner_iter.next().?, 10);
         const value = try std.fmt.parseInt(u32, inner_iter.next().?, 10);
 
-        if (output.getPtr(key)) |val_arr| {
-            try val_arr.append(value);
-        } else {
-            var list = std.ArrayList(u32).init(allocator);
-            try list.append(value);
-            try output.put(key, list);
-        }
+        try output.addEdge(key, value);
     }
 
     return output;
@@ -49,6 +105,7 @@ fn processPageOrder(allocator: std.mem.Allocator, page_order: []const u8) !std.A
     var output = std.ArrayList([]const u32).init(allocator);
     var iter = std.mem.splitSequence(u8, page_order, "\n");
     while (iter.next()) |line| {
+        if (line.len == 0) continue; // Skip empty lines
         var list = std.ArrayList(u32).init(allocator);
         defer list.deinit();
 
@@ -65,23 +122,24 @@ fn processPageOrder(allocator: std.mem.Allocator, page_order: []const u8) !std.A
     }
     return output;
 }
-fn checkPageSequence(page_restrictions: PageRestrictions, sequence: []const u32) bool {
-    for (sequence, 0..) |item, i| {
-        if (page_restrictions.get(item)) |restrictions| {
-            for (restrictions.items) |restriction| {
-                var iter = std.mem.reverseIterator(sequence[0..i]);
 
-                while (iter.next()) |item_to_check| {
-                    if (item_to_check == restriction) {
-                        return false;
+fn checkPageSequence(dag: *DAG, sequence: []const u32) bool {
+    for (0..sequence.len) |i| {
+        for (i + 1..sequence.len) |j| {
+            if (dag.adj_list.contains(sequence[j])) {
+                if (dag.adj_list.get(sequence[j])) |neighbors| {
+                    for (neighbors.items) |neighbor| {
+                        if (neighbor == sequence[i]) {
+                            return false;
+                        }
                     }
                 }
             }
         }
     }
-
     return true;
 }
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -90,12 +148,7 @@ pub fn main() !void {
     const data = processInput(input);
 
     var page_restrictions = try processPageRestrictions(allocator, data.page_restrictions);
-    defer {
-        for (page_restrictions.values()) |v| {
-            v.deinit();
-        }
-        page_restrictions.deinit();
-    }
+    defer page_restrictions.deinit();
 
     var page_order = try processPageOrder(allocator, data.page_order);
     defer {
@@ -105,13 +158,27 @@ pub fn main() !void {
         page_order.deinit();
     }
 
-    var sum: u32 = 0;
+    var incorrect_updates = std.ArrayList([]const u32).init(allocator);
+    defer incorrect_updates.deinit();
+
     for (page_order.items) |sequence| {
-        const valid_sequence = checkPageSequence(page_restrictions, sequence);
-        if (valid_sequence) {
-            sum += sequence[sequence.len / 2];
+        const valid_sequence = checkPageSequence(&page_restrictions, sequence);
+
+        if (!valid_sequence) {
+            const reordered = try page_restrictions.topologicalSort(sequence);
+            defer allocator.free(reordered);
+
+            try incorrect_updates.append(try allocator.dupe(u32, reordered));
         }
     }
 
-    std.debug.print("Sum is {}\n", .{sum});
+    var incorrect_sum: u32 = 0;
+    for (incorrect_updates.items) |update| {
+        defer allocator.free(update);
+        if (update.len > 0) {
+            incorrect_sum += update[update.len / 2];
+        }
+    }
+
+    std.debug.print("Sum of unordered sequences: {}\n", .{incorrect_sum});
 }
