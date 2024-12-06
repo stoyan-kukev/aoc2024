@@ -1,143 +1,130 @@
 const std = @import("std");
-const input = @embedFile("input.txt");
 
-const DAG = struct {
-    const Self = @This();
+const Pos = struct {
+    x: usize,
+    y: usize,
 
-    allocator: std.mem.Allocator,
-    adj_list: std.AutoArrayHashMap(u32, std.ArrayList(u32)),
+    fn addDir(self: *Pos, dir: Dir) !void {
+        const curr_x: isize = @intCast(self.x);
+        const curr_y: isize = @intCast(self.y);
 
-    pub fn init(allocator: std.mem.Allocator) !Self {
-        return Self{
-            .allocator = allocator,
-            .adj_list = std.AutoArrayHashMap(u32, std.ArrayList(u32)).init(allocator),
+        if (curr_x + dir.x < 0 or curr_y + dir.y < 0) {
+            return error.Underflow;
+        }
+
+        const new_x: usize = @intCast(curr_x + dir.x);
+        const new_y: usize = @intCast(curr_y + dir.y);
+
+        self.x = new_x;
+        self.y = new_y;
+    }
+
+    fn newFromSelf(self: Pos) Pos {
+        return .{
+            .x = self.x,
+            .y = self.y,
         };
     }
+};
 
-    pub fn deinit(self: *Self) void {
-        var it = self.adj_list.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit();
+const Dir = struct {
+    x: isize,
+    y: isize,
+};
+
+fn generateMapFromInput(allocator: std.mem.Allocator, input: []const u8) ![][]u8 {
+    var output = std.ArrayList([]u8).init(allocator);
+
+    var iter = std.mem.splitSequence(u8, input, "\n");
+    while (iter.next()) |line| {
+        if (line.len < 1) continue;
+
+        var chars = std.ArrayList(u8).init(allocator);
+        for (line) |char| {
+            try chars.append(char);
         }
-        self.adj_list.deinit();
+
+        try output.append(try chars.toOwnedSlice());
     }
 
-    pub fn addEdge(self: *Self, from: u32, to: u32) !void {
-        const adj_list = &self.adj_list;
+    return try output.toOwnedSlice();
+}
 
-        if (!adj_list.contains(from)) {
-            try adj_list.put(from, std.ArrayList(u32).init(self.allocator));
-        }
-
-        if (!adj_list.contains(to)) {
-            try adj_list.put(to, std.ArrayList(u32).init(self.allocator));
-        }
-
-        try adj_list.getPtr(from).?.append(to);
-    }
-
-    pub fn topologicalSort(self: *Self, input_sequence: []const u32) ![]u32 {
-        var sorted_sequence = try self.allocator.dupe(u32, input_sequence);
-
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (0..sorted_sequence.len) |i| {
-                for (0..sorted_sequence.len) |j| {
-                    if (i < j) {
-                        if (self.adj_list.get(sorted_sequence[j])) |neighbors| {
-                            for (neighbors.items) |neighbor| {
-                                if (neighbor == sorted_sequence[i]) {
-                                    // Swap to respect dependency
-                                    std.mem.swap(u32, &sorted_sequence[i], &sorted_sequence[j]);
-                                    changed = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+fn findGuardPos(map: [][]u8) !Pos {
+    for (map, 0..) |row, y| {
+        for (row, 0..) |_, x| {
+            switch (map[y][x]) {
+                '<', '>', '^', 'v' => return .{ .x = x, .y = y },
+                else => continue,
             }
         }
-
-        return sorted_sequence;
     }
-};
 
-const Input = struct {
-    page_restrictions: []const u8,
-    page_order: []const u8,
-};
+    return error.NoGuardFound;
+}
 
-fn processInput(string: []const u8) Input {
-    var lines = std.mem.splitSequence(u8, string, "\n\n");
-
-    const page_restrictions = lines.next().?;
-    const page_order = lines.next().?;
-
-    return .{
-        .page_restrictions = page_restrictions,
-        .page_order = page_order,
+fn getGuardDirection(map: [][]u8, guard_pos: Pos) !Dir {
+    return switch (map[guard_pos.y][guard_pos.x]) {
+        '>' => .{ .x = 1, .y = 0 },
+        '<' => .{ .x = -1, .y = 0 },
+        '^' => .{ .x = 0, .y = -1 },
+        'v' => .{ .x = 0, .y = 1 },
+        else => error.InvalidCharForDirection,
     };
 }
 
-fn processPageRestrictions(
-    allocator: std.mem.Allocator,
-    page_restrictions: []const u8,
-) !DAG {
-    var output = try DAG.init(allocator);
-    var iter = std.mem.splitSequence(u8, page_restrictions, "\n");
-
-    while (iter.next()) |line| {
-        if (line.len == 0) continue; // Skip empty lines
-        var inner_iter = std.mem.splitSequence(u8, line, "|");
-
-        const key = try std.fmt.parseInt(u32, inner_iter.next().?, 10);
-        const value = try std.fmt.parseInt(u32, inner_iter.next().?, 10);
-
-        try output.addEdge(key, value);
-    }
-
-    return output;
+fn getNewGuardRotation(current_rotation: u8) u8 {
+    return switch (current_rotation) {
+        '^' => '>',
+        '>' => 'v',
+        'v' => '<',
+        '<' => '^',
+        else => unreachable,
+    };
 }
 
-fn processPageOrder(allocator: std.mem.Allocator, page_order: []const u8) !std.ArrayList([]const u32) {
-    var output = std.ArrayList([]const u32).init(allocator);
-    var iter = std.mem.splitSequence(u8, page_order, "\n");
-    while (iter.next()) |line| {
-        if (line.len == 0) continue; // Skip empty lines
-        var list = std.ArrayList(u32).init(allocator);
-        defer list.deinit();
+fn countGuardSteps(allocator: std.mem.Allocator, map: [][]u8, guard_pos: *Pos) !usize {
+    var visited_pos = std.AutoArrayHashMap(Pos, void).init(allocator);
+    defer visited_pos.deinit();
 
-        var inner_iter = std.mem.splitSequence(u8, line, ",");
-        while (inner_iter.next()) |item| {
-            const parsedItem = std.fmt.parseInt(u32, item, 10) catch continue;
-            try list.append(parsedItem);
+    while (true) {
+        const current_guard = map[guard_pos.y][guard_pos.x];
+        const guard_dir = try getGuardDirection(map, guard_pos.*);
+
+        var new_guard_pos = guard_pos.newFromSelf();
+        new_guard_pos.addDir(guard_dir) catch {
+            return visited_pos.count();
+        };
+
+        if (new_guard_pos.x >= map[0].len or new_guard_pos.y >= map.len) {
+            return visited_pos.count();
         }
 
-        if (list.items.len > 0) {
-            const new_sequence = try allocator.dupe(u32, list.items);
-            try output.append(new_sequence);
+        switch (map[new_guard_pos.y][new_guard_pos.x]) {
+            '#' => {
+                map[guard_pos.y][guard_pos.x] = getNewGuardRotation(current_guard);
+            },
+            '.' => {
+                map[new_guard_pos.y][new_guard_pos.x] = current_guard;
+                map[guard_pos.y][guard_pos.x] = '.';
+
+                guard_pos.x = new_guard_pos.x;
+                guard_pos.y = new_guard_pos.y;
+
+                try visited_pos.put(.{ .x = guard_pos.x, .y = guard_pos.y }, {});
+            },
+            else => unreachable,
         }
     }
-    return output;
 }
 
-fn checkPageSequence(dag: *DAG, sequence: []const u32) bool {
-    for (0..sequence.len) |i| {
-        for (i + 1..sequence.len) |j| {
-            if (dag.adj_list.contains(sequence[j])) {
-                if (dag.adj_list.get(sequence[j])) |neighbors| {
-                    for (neighbors.items) |neighbor| {
-                        if (neighbor == sequence[i]) {
-                            return false;
-                        }
-                    }
-                }
-            }
+fn printMap(map: [][]u8) void {
+    for (map) |row| {
+        for (row) |item| {
+            std.debug.print("{c}", .{item});
         }
+        std.debug.print("\n", .{});
     }
-    return true;
 }
 
 pub fn main() !void {
@@ -145,40 +132,18 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const data = processInput(input);
+    const input = @embedFile("input.txt");
 
-    var page_restrictions = try processPageRestrictions(allocator, data.page_restrictions);
-    defer page_restrictions.deinit();
-
-    var page_order = try processPageOrder(allocator, data.page_order);
+    const map = try generateMapFromInput(allocator, input);
     defer {
-        for (page_order.items) |arr| {
-            allocator.free(arr);
+        for (map) |row| {
+            allocator.free(row);
         }
-        page_order.deinit();
+        allocator.free(map);
     }
 
-    var incorrect_updates = std.ArrayList([]const u32).init(allocator);
-    defer incorrect_updates.deinit();
+    var guard_pos = try findGuardPos(map);
 
-    for (page_order.items) |sequence| {
-        const valid_sequence = checkPageSequence(&page_restrictions, sequence);
-
-        if (!valid_sequence) {
-            const reordered = try page_restrictions.topologicalSort(sequence);
-            defer allocator.free(reordered);
-
-            try incorrect_updates.append(try allocator.dupe(u32, reordered));
-        }
-    }
-
-    var incorrect_sum: u32 = 0;
-    for (incorrect_updates.items) |update| {
-        defer allocator.free(update);
-        if (update.len > 0) {
-            incorrect_sum += update[update.len / 2];
-        }
-    }
-
-    std.debug.print("Sum of unordered sequences: {}\n", .{incorrect_sum});
+    const steps = try countGuardSteps(allocator, map, &guard_pos);
+    std.debug.print("Steps: {}\n", .{steps});
 }
