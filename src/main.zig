@@ -1,199 +1,155 @@
 const std = @import("std");
 
-const Pos = struct {
-    x: usize,
-    y: usize,
-
-    fn addDir(self: *Pos, dir: Dir) !void {
-        const curr_x: isize = @intCast(self.x);
-        const curr_y: isize = @intCast(self.y);
-
-        if (curr_x + dir.x < 0 or curr_y + dir.y < 0) {
-            return error.Underflow;
-        }
-
-        const new_x: usize = @intCast(curr_x + dir.x);
-        const new_y: usize = @intCast(curr_y + dir.y);
-
-        self.x = new_x;
-        self.y = new_y;
-    }
-
-    fn newFromSelf(self: Pos) Pos {
-        return .{
-            .x = self.x,
-            .y = self.y,
-        };
-    }
-
-    fn equalTo(self: Pos, other: Pos) bool {
-        return self.x == other.x and self.y == other.y;
-    }
+const ExpressionEntry = struct {
+    result: u64,
+    expression: []const u8,
 };
 
-const Dir = struct {
-    x: isize,
-    y: isize,
+const Operator = enum {
+    Add,
+    Multiply,
 };
 
-fn generateMapFromInput(allocator: std.mem.Allocator, input: []const u8) ![][]u8 {
-    var output = std.ArrayList([]u8).init(allocator);
+fn generateExpressions(allocator: std.mem.Allocator, numbers: []const u64) !std.ArrayList([]const u8) {
+    const num_count = numbers.len;
+    if (num_count < 2) return error.NotEnoughNumbers;
 
-    var iter = std.mem.splitSequence(u8, input, "\n");
-    while (iter.next()) |line| {
-        if (line.len < 1) continue;
+    // Total combinations will be 2^(num_count-1) as each gap between numbers can be + or *
+    const total_combinations = std.math.pow(u64, 2, @intCast(num_count - 1));
 
-        try output.append(try allocator.dupe(u8, line));
-    }
+    var expressions = std.ArrayList([]const u8).init(allocator);
+    errdefer expressions.deinit();
 
-    return try output.toOwnedSlice();
-}
+    var combination: u64 = 0;
+    while (combination < total_combinations) : (combination += 1) {
+        var expression_builder = std.ArrayList(u8).init(allocator);
+        errdefer expression_builder.deinit();
 
-fn findGuardPos(map: [][]u8) !Pos {
-    for (map, 0..) |row, y| {
-        for (row, 0..) |_, x| {
-            switch (map[y][x]) {
-                '<', '>', '^', 'v' => return .{ .x = x, .y = y },
-                else => continue,
-            }
+        const first_num_str = try std.fmt.allocPrint(allocator, "{}", .{numbers[0]});
+        defer allocator.free(first_num_str);
+        try expression_builder.appendSlice(first_num_str);
+
+        for (1..num_count) |i| {
+            // Determine operator based on the bit in the current combination
+            const op_bit = (combination >> @intCast(i - 1)) & 1;
+            const op: Operator = if (op_bit == 0) .Add else .Multiply;
+
+            try expression_builder.appendSlice(switch (op) {
+                .Add => " + ",
+                .Multiply => " * ",
+            });
+
+            const num_str = try std.fmt.allocPrint(allocator, "{}", .{numbers[i]});
+            defer allocator.free(num_str);
+
+            try expression_builder.appendSlice(num_str);
         }
+
+        try expressions.append(try expression_builder.toOwnedSlice());
     }
 
-    return error.NoGuardFound;
+    return expressions;
 }
 
-fn getGuardDirection(map: [][]u8, guard_pos: Pos) !Dir {
-    return switch (map[guard_pos.y][guard_pos.x]) {
-        '>' => .{ .x = 1, .y = 0 },
-        '<' => .{ .x = -1, .y = 0 },
-        '^' => .{ .x = 0, .y = -1 },
-        'v' => .{ .x = 0, .y = 1 },
-        else => error.InvalidCharForDirection,
-    };
-}
+fn evaluateExpression(expr: []const u8) !u64 {
+    var iter = std.mem.splitScalar(u8, expr, ' ');
 
-fn getNewGuardRotation(current_rotation: u8) u8 {
-    return switch (current_rotation) {
-        '^' => '>',
-        '>' => 'v',
-        'v' => '<',
-        '<' => '^',
-        else => unreachable,
-    };
-}
-
-fn countGuardSteps(allocator: std.mem.Allocator, map: [][]u8, guard_pos: *Pos) !usize {
-    var visited_pos = std.AutoArrayHashMap(Pos, void).init(allocator);
-    defer visited_pos.deinit();
-
-    var visited_blockades = std.AutoArrayHashMap(struct { pos: Pos, orientation: u8 }, void).init(allocator);
-    defer visited_blockades.deinit();
+    const first = iter.next() orelse return error.InvalidExpression;
+    var total = try std.fmt.parseInt(u64, first, 10);
 
     while (true) {
-        const current_guard = map[guard_pos.y][guard_pos.x];
-        const guard_dir = try getGuardDirection(map, guard_pos.*);
+        const op = iter.next() orelse break;
 
-        var new_guard_pos = guard_pos.newFromSelf();
-        new_guard_pos.addDir(guard_dir) catch {
-            return visited_pos.count();
+        const num_str = iter.next() orelse break;
+        const number = try std.fmt.parseInt(u64, num_str, 10);
+
+        total = switch (op[0]) {
+            '+' => total + number,
+            '*' => total * number,
+            else => return error.InvalidOperator,
         };
-
-        if (new_guard_pos.x >= map[0].len or new_guard_pos.y >= map.len) {
-            return visited_pos.count();
-        }
-
-        const state = .{ .pos = guard_pos.newFromSelf(), .orientation = current_guard };
-
-        if (visited_blockades.get(state)) |_| {
-            return error.LoopDetected;
-        }
-
-        switch (map[new_guard_pos.y][new_guard_pos.x]) {
-            '#' => {
-                try visited_blockades.put(state, {});
-                map[guard_pos.y][guard_pos.x] = getNewGuardRotation(current_guard);
-            },
-            '.' => {
-                map[new_guard_pos.y][new_guard_pos.x] = current_guard;
-                map[guard_pos.y][guard_pos.x] = '.';
-
-                guard_pos.x = new_guard_pos.x;
-                guard_pos.y = new_guard_pos.y;
-
-                try visited_pos.put(.{ .x = guard_pos.x, .y = guard_pos.y }, {});
-            },
-            else => unreachable,
-        }
-    }
-}
-
-fn printMap(map: [][]u8) void {
-    for (map) |row| {
-        for (row) |item| {
-            std.debug.print("{c}", .{item});
-        }
-        std.debug.print("\n", .{});
-    }
-}
-
-fn deepCopyMap(allocator: std.mem.Allocator, map: [][]u8) ![][]u8 {
-    var output = try std.ArrayList([]u8).initCapacity(allocator, map.len);
-
-    for (map) |row| {
-        try output.append(try allocator.dupe(u8, row));
     }
 
-    return try output.toOwnedSlice();
+    return total;
 }
 
-fn testObstaclePositions(allocator: std.mem.Allocator, map: [][]u8) !usize {
-    var obstacle_positions = std.ArrayList(Pos).init(allocator);
-    defer obstacle_positions.deinit();
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(ExpressionEntry) {
+    var output = std.ArrayList(ExpressionEntry).init(allocator);
+    errdefer output.deinit();
 
-    for (map, 0..) |row, y| {
-        for (row, 0..) |cell, x| {
-            if (cell != '.') continue;
+    var line_iter = std.mem.splitSequence(u8, input, "\n");
+    while (line_iter.next()) |line| {
+        if (line.len < 1) continue;
 
-            var map_copy = try deepCopyMap(allocator, map);
-            defer {
-                for (map_copy) |map_row| {
-                    allocator.free(map_row);
-                }
-                allocator.free(map_copy);
-            }
+        var seq_iter = std.mem.splitSequence(u8, line, ":");
 
-            map_copy[y][x] = '#';
+        const expectedResultStr = std.mem.trim(u8, seq_iter.next().?, " ");
+        const expectedResult = try std.fmt.parseInt(u64, expectedResultStr, 10);
 
-            var guard_pos = try findGuardPos(map_copy);
-            const result = countGuardSteps(allocator, map_copy, &guard_pos);
-            if (result == error.LoopDetected) {
-                try obstacle_positions.append(.{ .x = x, .y = y });
-            }
-        }
+        const expression = std.mem.trim(u8, seq_iter.next().?, " ");
+
+        try output.append(.{
+            .result = expectedResult,
+            .expression = try allocator.dupe(u8, expression),
+        });
     }
 
-    return obstacle_positions.items.len;
+    return output;
 }
 
-/// NOTE: This current solution takes ~11 seconds to complete compiled on ReleaseSafe
-/// (that's to be expected, since it's a brute force solution), which is really bad
-/// FIXME: Think of a better algorithm in the future that doesn't take 11 seconds for
-/// a 100x100 grid (I think that's how big the input is, or close to it)
+fn listToNumbers(allocator: std.mem.Allocator, list: []const u8) !std.ArrayList(u64) {
+    var output = std.ArrayList(u64).init(allocator);
+
+    var iter = std.mem.splitScalar(u8, list, ' ');
+    while (iter.next()) |num| {
+        try output.append(try std.fmt.parseInt(u64, num, 10));
+    }
+
+    return output;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     const input = @embedFile("input.txt");
-
-    const map = try generateMapFromInput(allocator, input);
+    var expressions = try parseInput(allocator, input);
     defer {
-        for (map) |row| {
-            allocator.free(row);
+        for (expressions.items) |entry| {
+            allocator.free(entry.expression);
         }
-        allocator.free(map);
+        expressions.deinit();
     }
 
-    const obstacle_positions = try testObstaclePositions(allocator, map);
-    std.debug.print("Valid positions: {}\n", .{obstacle_positions});
+    var sums = std.AutoHashMap(u64, void).init(allocator);
+    defer sums.deinit();
+
+    for (expressions.items) |entry| {
+        var numbers = try listToNumbers(allocator, entry.expression);
+        defer numbers.deinit();
+
+        var generated_expressions = try generateExpressions(allocator, numbers.items);
+        defer {
+            for (generated_expressions.items) |expr| {
+                allocator.free(expr);
+            }
+            generated_expressions.deinit();
+        }
+
+        for (generated_expressions.items) |expr| {
+            const result = try evaluateExpression(expr);
+            if (result == entry.result) {
+                try sums.put(result, {});
+            }
+        }
+    }
+
+    var sum: u64 = 0;
+    var iter = sums.keyIterator();
+    while (iter.next()) |key| {
+        sum += key.*;
+    }
+
+    std.debug.print("Final sum: {}\n", .{sum});
 }
