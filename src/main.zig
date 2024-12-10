@@ -1,79 +1,46 @@
 const std = @import("std");
 
 const ExpressionEntry = struct {
-    result: u64,
-    expression: []const u8,
+    target: u64,
+    numbers: std.ArrayList(u64),
 };
 
-const Operator = enum {
-    Add,
-    Multiply,
-};
-
-fn generateExpressions(allocator: std.mem.Allocator, numbers: []const u64) !std.ArrayList([]const u8) {
-    const num_count = numbers.len;
-    if (num_count < 2) return error.NotEnoughNumbers;
-
-    // Total combinations will be 2^(num_count-1) as each gap between numbers can be + or *
-    const total_combinations = std.math.pow(u64, 2, @intCast(num_count - 1));
-
-    var expressions = std.ArrayList([]const u8).init(allocator);
-    errdefer expressions.deinit();
-
-    var combination: u64 = 0;
-    while (combination < total_combinations) : (combination += 1) {
-        var expression_builder = std.ArrayList(u8).init(allocator);
-        errdefer expression_builder.deinit();
-
-        const first_num_str = try std.fmt.allocPrint(allocator, "{}", .{numbers[0]});
-        defer allocator.free(first_num_str);
-        try expression_builder.appendSlice(first_num_str);
-
-        for (1..num_count) |i| {
-            // Determine operator based on the bit in the current combination
-            const op_bit = (combination >> @intCast(i - 1)) & 1;
-            const op: Operator = if (op_bit == 0) .Add else .Multiply;
-
-            try expression_builder.appendSlice(switch (op) {
-                .Add => " + ",
-                .Multiply => " * ",
-            });
-
-            const num_str = try std.fmt.allocPrint(allocator, "{}", .{numbers[i]});
-            defer allocator.free(num_str);
-
-            try expression_builder.appendSlice(num_str);
-        }
-
-        try expressions.append(try expression_builder.toOwnedSlice());
+fn evaluate(
+    numbers: []const u64,
+    target: u64,
+    index: usize,
+    current: u64,
+    allocator: std.mem.Allocator,
+) bool {
+    if (index == numbers.len) {
+        return current == target;
     }
 
-    return expressions;
-}
-
-fn evaluateExpression(expr: []const u8) !u64 {
-    var iter = std.mem.splitScalar(u8, expr, ' ');
-
-    const first = iter.next() orelse return error.InvalidExpression;
-    var total = try std.fmt.parseInt(u64, first, 10);
-
-    while (true) {
-        const op = iter.next() orelse break;
-
-        const num_str = iter.next() orelse break;
-        const number = try std.fmt.parseInt(u64, num_str, 10);
-
-        total = switch (op[0]) {
-            '+' => total + number,
-            '*' => total * number,
-            else => return error.InvalidOperator,
-        };
+    const next = numbers[index];
+    // Try addition
+    if (evaluate(numbers, target, index + 1, current + next, allocator)) {
+        return true;
+    }
+    // Try multiplication
+    if (evaluate(numbers, target, index + 1, current * next, allocator)) {
+        return true;
+    }
+    // Try concatenation
+    var concat = current;
+    var power_of_ten: u32 = 1;
+    var temp = next;
+    while (temp != 0) : (temp /= 10) {
+        power_of_ten *= 10;
+    }
+    concat = concat * power_of_ten + next;
+    if (evaluate(numbers, target, index + 1, concat, allocator)) {
+        return true;
     }
 
-    return total;
+    return false;
 }
 
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(ExpressionEntry) {
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![]ExpressionEntry {
     var output = std.ArrayList(ExpressionEntry).init(allocator);
     errdefer output.deinit();
 
@@ -83,26 +50,29 @@ fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Ex
 
         var seq_iter = std.mem.splitSequence(u8, line, ":");
 
-        const expectedResultStr = std.mem.trim(u8, seq_iter.next().?, " ");
-        const expectedResult = try std.fmt.parseInt(u64, expectedResultStr, 10);
+        const targetStr = std.mem.trim(u8, seq_iter.next().?, " ");
+        const target = try std.fmt.parseInt(u64, targetStr, 10);
 
-        const expression = std.mem.trim(u8, seq_iter.next().?, " ");
+        const expressionStr = std.mem.trim(u8, seq_iter.next().?, " ");
+        const numbers = try parseNumbers(allocator, expressionStr);
 
         try output.append(.{
-            .result = expectedResult,
-            .expression = try allocator.dupe(u8, expression),
+            .target = target,
+            .numbers = numbers,
         });
     }
 
-    return output;
+    return output.toOwnedSlice();
 }
 
-fn listToNumbers(allocator: std.mem.Allocator, list: []const u8) !std.ArrayList(u64) {
+fn parseNumbers(allocator: std.mem.Allocator, str: []const u8) !std.ArrayList(u64) {
     var output = std.ArrayList(u64).init(allocator);
+    errdefer output.deinit();
 
-    var iter = std.mem.splitScalar(u8, list, ' ');
-    while (iter.next()) |num| {
-        try output.append(try std.fmt.parseInt(u64, num, 10));
+    var iter = std.mem.splitScalar(u8, str, ' ');
+    while (iter.next()) |num_str| {
+        const num = try std.fmt.parseInt(u64, num_str, 10);
+        try output.append(num);
     }
 
     return output;
@@ -114,41 +84,19 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const input = @embedFile("input.txt");
-    var expressions = try parseInput(allocator, input);
+    const entries = try parseInput(allocator, input);
     defer {
-        for (expressions.items) |entry| {
-            allocator.free(entry.expression);
+        for (entries) |entry| {
+            entry.numbers.deinit();
         }
-        expressions.deinit();
-    }
-
-    var sums = std.AutoHashMap(u64, void).init(allocator);
-    defer sums.deinit();
-
-    for (expressions.items) |entry| {
-        var numbers = try listToNumbers(allocator, entry.expression);
-        defer numbers.deinit();
-
-        var generated_expressions = try generateExpressions(allocator, numbers.items);
-        defer {
-            for (generated_expressions.items) |expr| {
-                allocator.free(expr);
-            }
-            generated_expressions.deinit();
-        }
-
-        for (generated_expressions.items) |expr| {
-            const result = try evaluateExpression(expr);
-            if (result == entry.result) {
-                try sums.put(result, {});
-            }
-        }
+        allocator.free(entries);
     }
 
     var sum: u64 = 0;
-    var iter = sums.keyIterator();
-    while (iter.next()) |key| {
-        sum += key.*;
+    for (entries) |entry| {
+        if (evaluate(entry.numbers.items, entry.target, 1, entry.numbers.items[0], allocator)) {
+            sum += entry.target;
+        }
     }
 
     std.debug.print("Final sum: {}\n", .{sum});
