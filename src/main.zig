@@ -60,8 +60,11 @@ fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
     return try output.toOwnedSlice();
 }
 
-fn calculateAntinode(pos1: Pos, pos2: Pos) Pos {
-    return .{ .x = pos1.x + 2 * (pos2.x - pos1.x), .y = pos1.y + 2 * (pos2.y - pos1.y) };
+fn calculateAntinode(pos1: Pos, pos2: Pos, i: isize) Pos {
+    return .{
+        .x = pos1.x + i * (pos2.x - pos1.x),
+        .y = pos1.y + i * (pos2.y - pos1.y),
+    };
 }
 
 pub fn main() !void {
@@ -99,19 +102,21 @@ pub fn main() !void {
                 const ant_pos1 = positions.items[i];
                 const ant_pos2 = positions.items[j];
 
-                // Ensure distance between antennas is exactly uniform
-                // const distance1 = ant_pos1.distance(ant_pos2);
+                var k: isize = 1;
+                var l: isize = 1;
 
                 // Calculate forward and backward antinodes
-                const possible_node1 = calculateAntinode(ant_pos1, ant_pos2);
-                const possible_node2 = calculateAntinode(ant_pos2, ant_pos1);
+                var possible_node1 = calculateAntinode(ant_pos1, ant_pos2, k);
+                var possible_node2 = calculateAntinode(ant_pos2, ant_pos1, l);
 
-                if (isValidAntinode(possible_node1, map)) {
+                while (isValidAntinode(possible_node1, map)) : (k += 1) {
                     try antinode_positions.put(possible_node1, {});
+                    possible_node1 = calculateAntinode(ant_pos1, ant_pos2, k);
                 }
 
-                if (isValidAntinode(possible_node2, map)) {
+                while (isValidAntinode(possible_node2, map)) : (l += 1) {
                     try antinode_positions.put(possible_node2, {});
+                    possible_node2 = calculateAntinode(ant_pos2, ant_pos1, l);
                 }
             }
         }
