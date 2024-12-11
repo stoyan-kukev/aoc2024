@@ -1,81 +1,67 @@
 const std = @import("std");
 
-const ExpressionEntry = struct {
-    target: u64,
-    numbers: std.ArrayList(u64),
+const Pos = struct {
+    x: isize,
+    y: isize,
+
+    fn distance(self: Pos, other: Pos) f64 {
+        const dx = self.x - other.x;
+        const dy = self.y - other.y;
+        return @sqrt(@as(f64, @floatFromInt(dx * dx + dy * dy)));
+    }
+
+    pub fn hash(self: Pos) u64 {
+        return @as(u64, @intCast(self.x)) * 31 + @as(u64, @intCast(self.y));
+    }
+
+    pub fn eql(self: Pos, other: Pos) bool {
+        return self.x == other.x and self.y == other.y;
+    }
 };
 
-fn evaluate(
-    numbers: []const u64,
-    target: u64,
-    index: usize,
-    current: u64,
-    allocator: std.mem.Allocator,
-) bool {
-    if (index == numbers.len) {
-        return current == target;
-    }
+const AntennaMap = std.AutoHashMap(u8, std.ArrayList(Pos));
 
-    const next = numbers[index];
-    // Try addition
-    if (evaluate(numbers, target, index + 1, current + next, allocator)) {
-        return true;
-    }
-    // Try multiplication
-    if (evaluate(numbers, target, index + 1, current * next, allocator)) {
-        return true;
-    }
-    // Try concatenation
-    var concat = current;
-    var power_of_ten: u32 = 1;
-    var temp = next;
-    while (temp != 0) : (temp /= 10) {
-        power_of_ten *= 10;
-    }
-    concat = concat * power_of_ten + next;
-    if (evaluate(numbers, target, index + 1, concat, allocator)) {
-        return true;
-    }
-
-    return false;
+fn isValidAntinode(node: Pos, map: [][]const u8) bool {
+    return node.x >= 0 and node.y >= 0 and
+        @as(usize, @intCast(node.x)) < map[0].len and
+        @as(usize, @intCast(node.y)) < map.len;
 }
 
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![]ExpressionEntry {
-    var output = std.ArrayList(ExpressionEntry).init(allocator);
-    errdefer output.deinit();
-
-    var line_iter = std.mem.splitSequence(u8, input, "\n");
-    while (line_iter.next()) |line| {
-        if (line.len < 1) continue;
-
-        var seq_iter = std.mem.splitSequence(u8, line, ":");
-
-        const targetStr = std.mem.trim(u8, seq_iter.next().?, " ");
-        const target = try std.fmt.parseInt(u64, targetStr, 10);
-
-        const expressionStr = std.mem.trim(u8, seq_iter.next().?, " ");
-        const numbers = try parseNumbers(allocator, expressionStr);
-
-        try output.append(.{
-            .target = target,
-            .numbers = numbers,
-        });
+fn findAntennas(allocator: std.mem.Allocator, map: [][]const u8) !AntennaMap {
+    var output = AntennaMap.init(allocator);
+    for (map, 0..) |row, j| {
+        for (row, 0..) |cell, i| {
+            const isDigit = cell >= '0' and cell <= '9';
+            const isLowerLetter = cell >= 'a' and cell <= 'z';
+            const isUpperLetter = cell >= 'A' and cell <= 'Z';
+            if (isDigit or isLowerLetter or isUpperLetter) {
+                if (output.getPtr(cell)) |entry| {
+                    try entry.append(.{ .x = @intCast(i), .y = @intCast(j) });
+                } else {
+                    var list = std.ArrayList(Pos).init(allocator);
+                    try list.append(.{ .x = @intCast(i), .y = @intCast(j) });
+                    try output.put(cell, list);
+                }
+            }
+        }
     }
-
-    return output.toOwnedSlice();
-}
-
-fn parseNumbers(allocator: std.mem.Allocator, str: []const u8) !std.ArrayList(u64) {
-    var output = std.ArrayList(u64).init(allocator);
-    errdefer output.deinit();
-
-    var iter = std.mem.splitScalar(u8, str, ' ');
-    while (iter.next()) |num_str| {
-        const num = try std.fmt.parseInt(u64, num_str, 10);
-        try output.append(num);
-    }
-
     return output;
+}
+
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
+    var output = std.ArrayList([]const u8).init(allocator);
+    defer output.deinit();
+    var iter = std.mem.splitSequence(u8, input, "\n");
+    while (iter.next()) |line| {
+        if (line.len > 0) {
+            try output.append(try allocator.dupe(u8, line));
+        }
+    }
+    return try output.toOwnedSlice();
+}
+
+fn calculateAntinode(pos1: Pos, pos2: Pos) Pos {
+    return .{ .x = pos1.x + 2 * (pos2.x - pos1.x), .y = pos1.y + 2 * (pos2.y - pos1.y) };
 }
 
 pub fn main() !void {
@@ -84,20 +70,53 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const input = @embedFile("input.txt");
-    const entries = try parseInput(allocator, input);
+    const map = try parseInput(allocator, input);
     defer {
-        for (entries) |entry| {
-            entry.numbers.deinit();
+        for (map) |row| {
+            allocator.free(row);
         }
-        allocator.free(entries);
+        allocator.free(map);
     }
 
-    var sum: u64 = 0;
-    for (entries) |entry| {
-        if (evaluate(entry.numbers.items, entry.target, 1, entry.numbers.items[0], allocator)) {
-            sum += entry.target;
+    var antenna_map = try findAntennas(allocator, map);
+    defer {
+        var iter = antenna_map.valueIterator();
+        while (iter.next()) |list| {
+            list.deinit();
+        }
+        antenna_map.deinit();
+    }
+
+    var antinode_positions = std.AutoHashMap(Pos, void).init(allocator);
+    defer antinode_positions.deinit();
+
+    var freq_iter = antenna_map.iterator();
+    while (freq_iter.next()) |freq_entry| {
+        const positions = freq_entry.value_ptr.*;
+
+        for (0..positions.items.len) |i| {
+            for (i + 1..positions.items.len) |j| {
+                const ant_pos1 = positions.items[i];
+                const ant_pos2 = positions.items[j];
+
+                // Ensure distance between antennas is exactly uniform
+                // const distance1 = ant_pos1.distance(ant_pos2);
+
+                // Calculate forward and backward antinodes
+                const possible_node1 = calculateAntinode(ant_pos1, ant_pos2);
+                const possible_node2 = calculateAntinode(ant_pos2, ant_pos1);
+
+                if (isValidAntinode(possible_node1, map)) {
+                    try antinode_positions.put(possible_node1, {});
+                }
+
+                if (isValidAntinode(possible_node2, map)) {
+                    try antinode_positions.put(possible_node2, {});
+                }
+            }
         }
     }
 
-    std.debug.print("Final sum: {}\n", .{sum});
+    // Print the count of unique antinode positions
+    std.debug.print("Number of unique antinode positions: {}\n", .{antinode_positions.count()});
 }
