@@ -1,107 +1,115 @@
 const std = @import("std");
 
-const DiskSector = struct {
-    const Self = @This();
-
-    id: ?usize,
-    count: usize,
+const DIRECTIONS = [4]Pos{
+    .{ .x = 1, .y = 0 },
+    .{ .x = 0, .y = 1 },
+    .{ .x = -1, .y = 0 },
+    .{ .x = 0, .y = -1 },
 };
 
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(u32) {
-    var output = std.ArrayList(u32).init(allocator);
+const Pos = struct {
+    x: isize,
+    y: isize,
+
+    fn add(self: Pos, other: Pos) Pos {
+        return .{
+            .x = self.x + other.x,
+            .y = self.y + other.y,
+        };
+    }
+};
+
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList([]u32) {
+    var output = std.ArrayList([]u32).init(allocator);
     errdefer output.deinit();
 
-    for (input) |char| {
-        if (!std.ascii.isDigit(char)) continue;
-        try output.append(try std.fmt.parseInt(u32, &.{char}, 10));
+    var iter = std.mem.splitSequence(u8, input, "\n");
+    while (iter.next()) |line| {
+        var row = std.ArrayList(u32).init(allocator);
+        errdefer row.deinit();
+
+        for (line) |char| {
+            if (line.len < 1 or !std.ascii.isDigit(char)) continue;
+            try row.append(try std.fmt.parseInt(u32, &.{char}, 10));
+        }
+
+        try output.append(try row.toOwnedSlice());
     }
 
     return output;
 }
 
-fn countSectors(allocator: std.mem.Allocator, items: []u32) !std.ArrayList(DiskSector) {
-    var sectors = std.ArrayList(DiskSector).init(allocator);
-
-    var id: usize = 0;
-    for (items, 0..) |num, i| {
-        if (i % 2 != 0) {
-            try sectors.append(.{ .id = null, .count = num });
-        } else {
-            try sectors.append(.{ .id = id, .count = num });
-            id += 1;
+fn printMap(map: [][]u32) void {
+    for (map) |row| {
+        for (row) |height| {
+            std.debug.print("{}", .{height});
         }
-    }
-
-    return sectors;
-}
-
-fn findSectorById(sectors: *std.ArrayList(DiskSector), id: usize) !usize {
-    for (sectors.items, 0..) |sector, i| {
-        if (sector.id) |sec_id| {
-            if (sec_id == id) {
-                return i;
-            }
-        }
-    }
-
-    return error.CantFindSector;
-}
-
-pub fn reorderSectors(sectors: *std.ArrayList(DiskSector)) !void {
-    var curr_id_to_check: usize = blk: {
-        var max_id: usize = 0;
-        for (sectors.items) |sector| {
-            max_id = @max(max_id, sector.id orelse 0);
-        }
-        break :blk max_id;
-    };
-
-    while (curr_id_to_check != 0) : (curr_id_to_check -= 1) {
-        var free_space_idx: usize = 0;
-        const sec_to_move = try findSectorById(sectors, curr_id_to_check);
-
-        while (free_space_idx < sec_to_move) : (free_space_idx += 1) {
-            if (sectors.items[free_space_idx].id != null) continue;
-
-            if (sectors.items[free_space_idx].count == sectors.items[sec_to_move].count) {
-                sectors.items[free_space_idx].id = sectors.items[sec_to_move].id;
-                sectors.items[sec_to_move].id = null;
-
-                break;
-            } else if (sectors.items[free_space_idx].count > sectors.items[sec_to_move].count) {
-                sectors.items[free_space_idx].count -= sectors.items[sec_to_move].count;
-                const sector_copy = sectors.items[sec_to_move];
-
-                sectors.items[sec_to_move].id = null;
-                try sectors.insert(free_space_idx, .{
-                    .id = sector_copy.id,
-                    .count = sector_copy.count,
-                });
-
-                break;
-            }
-        }
+        std.debug.print("\n", .{});
     }
 }
 
-fn mergeFreeSpaces(sectors: *std.ArrayList(DiskSector)) !void {
-    var i: usize = 0;
-    while (i < sectors.items.len) {
-        if (sectors.items[i].id == null) {
-            var acc: usize = sectors.items[i].count;
-            const j: usize = i + 1;
+fn findTrailheads(allocator: std.mem.Allocator, map: [][]u32) !std.AutoHashMap(Pos, void) {
+    var output = std.AutoHashMap(Pos, void).init(allocator);
 
-            while (j < sectors.items.len and sectors.items[j].id == null) {
-                acc += sectors.items[j].count;
-                _ = sectors.orderedRemove(j);
-            }
-
-            if (acc > sectors.items[i].count) {
-                sectors.items[i].count = acc;
+    for (map, 0..) |row, y| {
+        for (row, 0..) |_, x| {
+            if (map[y][x] == 0) {
+                try output.put(.{ .x = @intCast(x), .y = @intCast(y) }, {});
             }
         }
-        i += 1;
     }
+
+    return output;
+}
+
+fn validPos(pos: Pos, map: [][]u32) bool {
+    return pos.x >= 0 and
+        pos.x < map[0].len and
+        pos.y >= 0 and
+        pos.y < map.len - 1;
+}
+
+fn getVisitedForTrailhead(allocator: std.mem.Allocator, start_pos: Pos, map: [][]u32, debug: bool) !usize {
+    var visited = std.AutoHashMap(Pos, void).init(allocator);
+    defer visited.deinit();
+
+    var queue = std.ArrayList(Pos).init(allocator);
+    defer queue.deinit();
+
+    try queue.append(start_pos);
+    try visited.put(start_pos, {});
+
+    while (queue.items.len > 0) {
+        var current_cell = queue.orderedRemove(0);
+        const old_val = map[@intCast(current_cell.y)][@intCast(current_cell.x)];
+
+        if (debug) std.debug.print("Currently on ({}, {})\n", .{ current_cell.x, current_cell.y });
+
+        for (DIRECTIONS) |dir| {
+            const new_pos = current_cell.add(dir);
+            if (debug) std.debug.print("Attempting ({}, {}) ...\n", .{ new_pos.x, new_pos.y });
+            if (!validPos(new_pos, map) or visited.get(new_pos) != null) continue;
+
+            const cur_val = map[@intCast(new_pos.y)][@intCast(new_pos.x)];
+
+            const is_uphill = cur_val == old_val + 1;
+            if (is_uphill) {
+                if (debug) std.debug.print("Moving from ({}, {}) to ({}, {})\n", .{ current_cell.x, current_cell.y, new_pos.x, new_pos.y });
+                try queue.append(new_pos);
+                try visited.put(new_pos, {});
+            }
+        }
+    }
+
+    var peaks_reached: usize = 0;
+    var iter = visited.keyIterator();
+    while (iter.next()) |pos| {
+        if (map[@intCast(pos.y)][@intCast(pos.x)] == 9) {
+            peaks_reached += 1;
+        }
+    }
+
+    return peaks_reached;
 }
 
 pub fn main() !void {
@@ -112,28 +120,24 @@ pub fn main() !void {
     const input = @embedFile("input.txt");
 
     const map = try parseInput(allocator, input);
-    defer map.deinit();
-
-    var sectors = try countSectors(allocator, map.items);
-    defer sectors.deinit();
-
-    try reorderSectors(&sectors);
-    try mergeFreeSpaces(&sectors);
-
-    var checksum: usize = 0;
-    var pos: usize = 0;
-    for (sectors.items) |*sector| {
-        if (sector.id == null) {
-            pos += sector.count;
-            continue;
+    defer {
+        for (map.items) |row| {
+            allocator.free(row);
         }
-
-        while (sector.count > 0) {
-            sector.count -= 1;
-            checksum += sector.id.? * pos;
-            pos += 1;
-        }
+        map.deinit();
     }
 
-    std.debug.print("Checksum: {}\n", .{checksum});
+    var trailheads = try findTrailheads(allocator, map.items);
+    defer trailheads.deinit();
+
+    var sum: usize = 0;
+
+    var iter = trailheads.keyIterator();
+    while (iter.next()) |trailhead| {
+        const visited = try getVisitedForTrailhead(allocator, trailhead.*, map.items, false);
+
+        sum += visited;
+    }
+
+    std.debug.print("Total: {}\n", .{sum});
 }
