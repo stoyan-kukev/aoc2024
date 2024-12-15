@@ -1,115 +1,51 @@
 const std = @import("std");
 
-const DIRECTIONS = [4]Pos{
-    .{ .x = 1, .y = 0 },
-    .{ .x = 0, .y = 1 },
-    .{ .x = -1, .y = 0 },
-    .{ .x = 0, .y = -1 },
-};
-
-const Pos = struct {
-    x: isize,
-    y: isize,
-
-    fn add(self: Pos, other: Pos) Pos {
-        return .{
-            .x = self.x + other.x,
-            .y = self.y + other.y,
-        };
-    }
-};
-
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList([]u32) {
-    var output = std.ArrayList([]u32).init(allocator);
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(u64) {
+    var output = std.ArrayList(u64).init(allocator);
     errdefer output.deinit();
 
-    var iter = std.mem.splitSequence(u8, input, "\n");
-    while (iter.next()) |line| {
-        var row = std.ArrayList(u32).init(allocator);
-        errdefer row.deinit();
-
-        for (line) |char| {
-            if (line.len < 1 or !std.ascii.isDigit(char)) continue;
-            try row.append(try std.fmt.parseInt(u32, &.{char}, 10));
-        }
-
-        try output.append(try row.toOwnedSlice());
+    var iter = std.mem.splitSequence(u8, std.mem.trim(u8, input, "\n"), " ");
+    while (iter.next()) |number| {
+        const num = std.fmt.parseInt(u64, number, 10) catch continue;
+        try output.append(num);
     }
 
     return output;
 }
 
-fn printMap(map: [][]u32) void {
-    for (map) |row| {
-        for (row) |height| {
-            std.debug.print("{}", .{height});
-        }
-        std.debug.print("\n", .{});
+fn printNums(nums: []u64) void {
+    for (nums) |num| {
+        std.debug.print("{} ", .{num});
     }
+    std.debug.print("\n", .{});
 }
 
-fn findTrailheads(allocator: std.mem.Allocator, map: [][]u32) !std.AutoHashMap(Pos, void) {
-    var output = std.AutoHashMap(Pos, void).init(allocator);
+fn countDigits(num: u64) usize {
+    if (num == 0) return 1;
 
-    for (map, 0..) |row, y| {
-        for (row, 0..) |_, x| {
-            if (map[y][x] == 0) {
-                try output.put(.{ .x = @intCast(x), .y = @intCast(y) }, {});
-            }
-        }
-    }
-
-    return output;
+    return @intFromFloat(@floor(@log10(@as(f64, @floatFromInt(num)))) + 1);
 }
 
-fn validPos(pos: Pos, map: [][]u32) bool {
-    return pos.x >= 0 and
-        pos.x < map[0].len and
-        pos.y >= 0 and
-        pos.y < map.len - 1;
-}
+fn evaluateStep(nums: *std.ArrayList(u64)) !void {
+    var i: usize = 0;
+    while (i < nums.items.len) : (i += 1) {
+        const digit_count = countDigits(nums.items[i]);
 
-fn getVisitedForTrailhead(allocator: std.mem.Allocator, start_pos: Pos, map: [][]u32) !usize {
-    var paths = std.ArrayList(std.ArrayList(Pos)).init(allocator);
-    defer {
-        for (paths.items) |*path| {
-            path.deinit();
-        }
-        paths.deinit();
-    }
+        if (nums.items[i] == 0) {
+            nums.items[i] = 1;
+        } else if (digit_count % 2 == 0) {
+            const divisor = std.math.pow(u64, 10, digit_count / 2);
 
-    var initial_path = std.ArrayList(Pos).init(allocator);
-    try initial_path.append(start_pos);
-    try paths.append(initial_path);
+            const first_half: u64 = nums.items[i] / divisor;
+            const second_half: u64 = nums.items[i] % divisor;
 
-    var result_paths: usize = 0;
-
-    while (paths.items.len > 0) {
-        var current_path = paths.orderedRemove(0);
-        defer current_path.deinit();
-        const current_pos = current_path.items[current_path.items.len - 1];
-        const current_height = map[@intCast(current_pos.y)][@intCast(current_pos.x)];
-
-        if (current_height == 9) {
-            result_paths += 1;
-            continue;
-        }
-
-        for (DIRECTIONS) |dir| {
-            const new_pos = current_pos.add(dir);
-            if (!validPos(new_pos, map)) continue;
-
-            const new_height = map[@intCast(new_pos.y)][@intCast(new_pos.x)];
-            if (new_height == current_height + 1) {
-                var new_path = try std.ArrayList(Pos).initCapacity(allocator, current_path.items.len + 1);
-                new_path.appendSliceAssumeCapacity(current_path.items);
-                try new_path.append(new_pos);
-                try paths.append(new_path);
-            }
+            nums.items[i] = second_half;
+            try nums.insert(i, first_half);
+            i += 1;
+        } else {
+            nums.items[i] *= 2024;
         }
     }
-
-    return result_paths;
 }
 
 pub fn main() !void {
@@ -119,25 +55,13 @@ pub fn main() !void {
 
     const input = @embedFile("input.txt");
 
-    const map = try parseInput(allocator, input);
-    defer {
-        for (map.items) |row| {
-            allocator.free(row);
-        }
-        map.deinit();
+    var numbers = try parseInput(allocator, input);
+    defer numbers.deinit();
+
+    for (0..75) |i| {
+        try evaluateStep(&numbers);
+        std.debug.print("Done {}!\n", .{i});
     }
 
-    var trailheads = try findTrailheads(allocator, map.items);
-    defer trailheads.deinit();
-
-    var sum: usize = 0;
-
-    var iter = trailheads.keyIterator();
-    while (iter.next()) |trailhead| {
-        const visited = try getVisitedForTrailhead(allocator, trailhead.*, map.items);
-
-        sum += visited;
-    }
-
-    std.debug.print("Total: {}\n", .{sum});
+    std.debug.print("Count: {}\n", .{numbers.items.len});
 }
