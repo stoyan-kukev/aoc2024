@@ -69,47 +69,47 @@ fn validPos(pos: Pos, map: [][]u32) bool {
         pos.y < map.len - 1;
 }
 
-fn getVisitedForTrailhead(allocator: std.mem.Allocator, start_pos: Pos, map: [][]u32, debug: bool) !usize {
-    var visited = std.AutoHashMap(Pos, void).init(allocator);
-    defer visited.deinit();
+fn getVisitedForTrailhead(allocator: std.mem.Allocator, start_pos: Pos, map: [][]u32) !usize {
+    var paths = std.ArrayList(std.ArrayList(Pos)).init(allocator);
+    defer {
+        for (paths.items) |*path| {
+            path.deinit();
+        }
+        paths.deinit();
+    }
 
-    var queue = std.ArrayList(Pos).init(allocator);
-    defer queue.deinit();
+    var initial_path = std.ArrayList(Pos).init(allocator);
+    try initial_path.append(start_pos);
+    try paths.append(initial_path);
 
-    try queue.append(start_pos);
-    try visited.put(start_pos, {});
+    var result_paths: usize = 0;
 
-    while (queue.items.len > 0) {
-        var current_cell = queue.orderedRemove(0);
-        const old_val = map[@intCast(current_cell.y)][@intCast(current_cell.x)];
+    while (paths.items.len > 0) {
+        var current_path = paths.orderedRemove(0);
+        defer current_path.deinit();
+        const current_pos = current_path.items[current_path.items.len - 1];
+        const current_height = map[@intCast(current_pos.y)][@intCast(current_pos.x)];
 
-        if (debug) std.debug.print("Currently on ({}, {})\n", .{ current_cell.x, current_cell.y });
+        if (current_height == 9) {
+            result_paths += 1;
+            continue;
+        }
 
         for (DIRECTIONS) |dir| {
-            const new_pos = current_cell.add(dir);
-            if (debug) std.debug.print("Attempting ({}, {}) ...\n", .{ new_pos.x, new_pos.y });
-            if (!validPos(new_pos, map) or visited.get(new_pos) != null) continue;
+            const new_pos = current_pos.add(dir);
+            if (!validPos(new_pos, map)) continue;
 
-            const cur_val = map[@intCast(new_pos.y)][@intCast(new_pos.x)];
-
-            const is_uphill = cur_val == old_val + 1;
-            if (is_uphill) {
-                if (debug) std.debug.print("Moving from ({}, {}) to ({}, {})\n", .{ current_cell.x, current_cell.y, new_pos.x, new_pos.y });
-                try queue.append(new_pos);
-                try visited.put(new_pos, {});
+            const new_height = map[@intCast(new_pos.y)][@intCast(new_pos.x)];
+            if (new_height == current_height + 1) {
+                var new_path = try std.ArrayList(Pos).initCapacity(allocator, current_path.items.len + 1);
+                new_path.appendSliceAssumeCapacity(current_path.items);
+                try new_path.append(new_pos);
+                try paths.append(new_path);
             }
         }
     }
 
-    var peaks_reached: usize = 0;
-    var iter = visited.keyIterator();
-    while (iter.next()) |pos| {
-        if (map[@intCast(pos.y)][@intCast(pos.x)] == 9) {
-            peaks_reached += 1;
-        }
-    }
-
-    return peaks_reached;
+    return result_paths;
 }
 
 pub fn main() !void {
@@ -134,7 +134,7 @@ pub fn main() !void {
 
     var iter = trailheads.keyIterator();
     while (iter.next()) |trailhead| {
-        const visited = try getVisitedForTrailhead(allocator, trailhead.*, map.items, false);
+        const visited = try getVisitedForTrailhead(allocator, trailhead.*, map.items);
 
         sum += visited;
     }
