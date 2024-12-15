@@ -1,78 +1,68 @@
 const std = @import("std");
 
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.AutoHashMap(u64, u64) {
-    var map = std.AutoHashMap(u64, u64).init(allocator);
-    errdefer map.deinit();
+const DIRECTIONS = [4]Pos{
+    .{ .x = 1, .y = 0 },
+    .{ .x = 0, .y = 1 },
+    .{ .x = -1, .y = 0 },
+    .{ .x = 0, .y = -1 },
+};
 
-    var iter = std.mem.splitSequence(u8, std.mem.trim(u8, input, "\n"), " ");
-    while (iter.next()) |number| {
-        const num = std.fmt.parseInt(u64, number, 10) catch continue;
-        if (map.get(num)) |count| {
-            map.put(num, count + 1) catch unreachable;
-        } else {
-            map.put(num, 1) catch unreachable;
-        }
+const Pos = struct {
+    x: isize,
+    y: isize,
+
+    fn add(self: Pos, other: Pos) Pos {
+        return .{
+            .x = self.x + other.x,
+            .y = self.y + other.y,
+        };
     }
 
-    return map;
+    fn eql(self: Pos, other: Pos) bool {
+        return self.x == other.x and self.y == other.y;
+    }
+};
+
+fn dfs(garden: []const []const u8, pos: Pos, char: u8, visited: *std.AutoHashMap(Pos, bool), region: *std.ArrayList(Pos)) !void {
+    if (pos.x < 0 or pos.y < 0 or pos.x >= garden[0].len or pos.y >= garden.len) return;
+    if (garden[@intCast(pos.y)][@intCast(pos.x)] != char) return;
+    if (visited.get(pos)) |v| if (v) return;
+
+    try visited.put(pos, true);
+    try region.append(pos);
+
+    for (DIRECTIONS) |dir| {
+        try dfs(garden, pos.add(dir), char, visited, region);
+    }
 }
 
-fn countDigits(num: u64) usize {
-    if (num == 0) return 1;
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
+    var lines = std.ArrayList([]const u8).init(allocator);
+    defer lines.deinit();
 
-    return @intFromFloat(@floor(@log10(@as(f64, @floatFromInt(num)))) + 1);
+    var iter = std.mem.splitSequence(u8, input, "\n");
+    while (iter.next()) |line| {
+        if (line.len > 0) try lines.append(line);
+    }
+
+    return try lines.toOwnedSlice();
 }
 
-fn evaluateStep(
-    freq_map: *std.AutoHashMap(u64, u64),
-    allocator: std.mem.Allocator,
-) !void {
-    var next_map = std.AutoHashMap(u64, u64).init(allocator);
-    defer next_map.deinit();
+fn calculateRegionPerimeter(garden: []const []const u8, region: std.ArrayList(Pos)) usize {
+    var perimeter: usize = 0;
 
-    var iter = freq_map.iterator();
-    while (iter.next()) |entry| {
-        const stone = entry.key_ptr.*;
-        const count = entry.value_ptr.*;
-
-        const digit_count = countDigits(stone);
-        if (stone == 0) {
-            if (next_map.get(1)) |existing_count| {
-                try next_map.put(1, existing_count + count);
-            } else {
-                try next_map.put(1, count);
-            }
-        } else if (digit_count % 2 == 0) {
-            const divisor = std.math.pow(u64, 10, digit_count / 2);
-            const first_half: u64 = stone / divisor;
-            const second_half: u64 = stone % divisor;
-
-            if (next_map.get(first_half)) |existing_count| {
-                try next_map.put(first_half, existing_count + count);
-            } else {
-                try next_map.put(first_half, count);
-            }
-
-            if (next_map.get(second_half)) |existing_count| {
-                try next_map.put(second_half, existing_count + count);
-            } else {
-                try next_map.put(second_half, count);
-            }
-        } else {
-            const new_value = stone * 2024;
-            if (next_map.get(new_value)) |existing_count| {
-                try next_map.put(new_value, existing_count + count);
-            } else {
-                try next_map.put(new_value, count);
+    for (region.items) |pos| {
+        for (DIRECTIONS) |dir| {
+            const new_pos = pos.add(dir);
+            if (new_pos.x < 0 or new_pos.y < 0 or new_pos.y >= garden.len or new_pos.x >= garden[0].len or
+                garden[@intCast(new_pos.y)][@intCast(new_pos.x)] != garden[@intCast(pos.y)][@intCast(pos.x)])
+            {
+                perimeter += 1;
             }
         }
     }
 
-    freq_map.clearAndFree();
-    var iter_next = next_map.iterator();
-    while (iter_next.next()) |entry| {
-        try freq_map.put(entry.key_ptr.*, entry.value_ptr.*);
-    }
+    return perimeter;
 }
 
 pub fn main() !void {
@@ -81,19 +71,28 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const input = @embedFile("input.txt");
+    const garden = try parseInput(allocator, input);
+    defer allocator.free(garden);
 
-    var freq_map = try parseInput(allocator, input);
-    defer freq_map.deinit();
+    var visited = std.AutoHashMap(Pos, bool).init(allocator);
+    defer visited.deinit();
 
-    for (0..75) |_| {
-        try evaluateStep(&freq_map, allocator);
+    var total_price: usize = 0;
+
+    for (garden, 0..) |row, y| {
+        for (row, 0..) |char, x| {
+            const pos = Pos{ .x = @intCast(x), .y = @intCast(y) };
+            if (visited.get(pos) == null) {
+                var region = std.ArrayList(Pos).init(allocator);
+                defer region.deinit();
+                try dfs(garden, pos, char, &visited, &region);
+
+                const perimeter = calculateRegionPerimeter(garden, region);
+                const area = region.items.len;
+                total_price += area * perimeter;
+            }
+        }
     }
 
-    var total_stones: u64 = 0;
-    var iter = freq_map.iterator();
-    while (iter.next()) |entry| {
-        total_stones += entry.value_ptr.*;
-    }
-
-    std.debug.print("Stone count: {}\n", .{total_stones});
+    std.debug.print("Final price: {}\n", .{total_price});
 }
