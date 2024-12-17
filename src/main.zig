@@ -9,22 +9,16 @@ const State = struct {
     target: Pos,
 
     const Pos = struct {
-        x: i64,
-        y: i64,
-    };
-
-    const Move = struct {
-        x: i64,
-        y: i64,
-        tokens: i64,
+        x: f64,
+        y: f64,
     };
 };
 
-fn parseCoord(str: []const u8, coord: u8) !i64 {
+fn parseCoord(str: []const u8, coord: u8) !f64 {
     const index = std.mem.indexOfScalar(u8, str, coord) orelse return error.CoordNotFound;
     var j = index + 2;
     while (j < str.len and std.ascii.isDigit(str[j])) : (j += 1) {}
-    return std.fmt.parseInt(i64, str[index + 2 .. j], 10);
+    return @floatFromInt(try std.fmt.parseInt(i64, str[index + 2 .. j], 10));
 }
 
 fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ArrayList(State) {
@@ -49,8 +43,8 @@ fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ArrayList(State)
                 .y = try parseCoord(btn_b, 'Y'),
             },
             .target = .{
-                .x = try parseCoord(coords, 'X'),
-                .y = try parseCoord(coords, 'Y'),
+                .x = try parseCoord(coords, 'X') + 10000000000000,
+                .y = try parseCoord(coords, 'Y') + 10000000000000,
             },
         };
 
@@ -60,54 +54,22 @@ fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ArrayList(State)
     return states;
 }
 
-fn solveState(state: State, allocator: std.mem.Allocator) !?i64 {
-    var queue = ArrayList(struct { x: i64, y: i64, a_presses: i64, b_presses: i64, tokens: i64 }).init(allocator);
-    defer queue.deinit();
+fn solveState(state: State) i64 {
+    const n1 = state.target.x * state.b_move.y - state.target.y * state.b_move.x;
+    const dn1 = state.a_move.x * state.b_move.y - state.a_move.y * state.b_move.x;
 
-    var visited = AutoHashMap(struct { x: i64, y: i64, a_presses: i64, b_presses: i64 }, void).init(allocator);
-    defer visited.deinit();
+    const a = n1 / dn1;
 
-    try queue.append(.{ .x = 0, .y = 0, .a_presses = 0, .b_presses = 0, .tokens = 0 });
+    const n2 = state.target.x - state.a_move.x * a;
+    const dn2 = state.b_move.x;
 
-    while (queue.items.len > 0) {
-        const current = queue.orderedRemove(0);
+    const b = n2 / dn2;
 
-        if (current.x == state.target.x and current.y == state.target.y) {
-            return current.tokens;
-        }
-
-        if (current.a_presses > 100 or current.b_presses > 100) {
-            continue;
-        }
-
-        const key = .{ .x = current.x, .y = current.y, .a_presses = current.a_presses, .b_presses = current.b_presses };
-        if (visited.contains(key)) continue;
-        try visited.put(key, {});
-
-        // Try A button
-        if (current.a_presses < 100) {
-            try queue.append(.{
-                .x = current.x + state.a_move.x,
-                .y = current.y + state.a_move.y,
-                .a_presses = current.a_presses + 1,
-                .b_presses = current.b_presses,
-                .tokens = current.tokens + 3,
-            });
-        }
-
-        // Try B button
-        if (current.b_presses < 100) {
-            try queue.append(.{
-                .x = current.x + state.b_move.x,
-                .y = current.y + state.b_move.y,
-                .a_presses = current.a_presses,
-                .b_presses = current.b_presses + 1,
-                .tokens = current.tokens + 1,
-            });
-        }
+    if (@mod(a, 1) == 0 and @mod(b, 1) == 0) {
+        return @intFromFloat(a * 3 + b);
     }
 
-    return null;
+    return 0;
 }
 
 pub fn main() !void {
@@ -121,11 +83,7 @@ pub fn main() !void {
 
     var total_tokens: i64 = 0;
     for (states.items) |state| {
-        if (try solveState(state, allocator)) |tokens| {
-            total_tokens += tokens;
-        } else {
-            print("No solution for state\n", .{});
-        }
+        total_tokens += solveState(state);
     }
 
     print("Total tokens: {}\n", .{total_tokens});
