@@ -1,184 +1,132 @@
 const std = @import("std");
+const print = std.debug.print;
+const ArrayList = std.ArrayList;
+const AutoHashMap = std.AutoHashMap;
 
-const DIRECTIONS = [4]Pos{
-    .{ .x = 0, .y = -1 },
-    .{ .x = 0, .y = 1 },
-    .{ .x = -1, .y = 0 },
-    .{ .x = 1, .y = 0 },
+const State = struct {
+    a_move: Pos,
+    b_move: Pos,
+    target: Pos,
+
+    const Pos = struct {
+        x: i64,
+        y: i64,
+    };
+
+    const Move = struct {
+        x: i64,
+        y: i64,
+        tokens: i64,
+    };
 };
 
-const PosContext = struct {
-    pub fn hash(self: @This(), key: Pos) u64 {
-        _ = self;
-        const x_bits: u32 = @bitCast(key.x);
-        const y_bits: u32 = @bitCast(key.y);
-        return (@as(u64, x_bits) << 32) | y_bits;
-    }
+fn parseCoord(str: []const u8, coord: u8) !i64 {
+    const index = std.mem.indexOfScalar(u8, str, coord) orelse return error.CoordNotFound;
+    var j = index + 2;
+    while (j < str.len and std.ascii.isDigit(str[j])) : (j += 1) {}
+    return std.fmt.parseInt(i64, str[index + 2 .. j], 10);
+}
 
-    pub fn eql(self: @This(), a: Pos, b: Pos) bool {
-        _ = self;
-        return a.x == b.x and a.y == b.y;
-    }
-};
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ArrayList(State) {
+    var states = ArrayList(State).init(allocator);
+    errdefer states.deinit();
 
-const Pos = struct {
-    x: f32,
-    y: f32,
+    var iter = std.mem.splitSequence(u8, input, "\n\n");
+    while (iter.next()) |machine| {
+        var line_iter = std.mem.splitScalar(u8, machine, '\n');
 
-    fn add(self: Pos, other: Pos) Pos {
-        return .{
-            .x = self.x + other.x,
-            .y = self.y + other.y,
+        const btn_a = line_iter.next() orelse return error.InvalidInput;
+        const btn_b = line_iter.next() orelse return error.InvalidInput;
+        const coords = line_iter.next() orelse return error.InvalidInput;
+
+        const state = State{
+            .a_move = .{
+                .x = try parseCoord(btn_a, 'X'),
+                .y = try parseCoord(btn_a, 'Y'),
+            },
+            .b_move = .{
+                .x = try parseCoord(btn_b, 'X'),
+                .y = try parseCoord(btn_b, 'Y'),
+            },
+            .target = .{
+                .x = try parseCoord(coords, 'X'),
+                .y = try parseCoord(coords, 'Y'),
+            },
         };
+
+        try states.append(state);
     }
 
-    fn eql(self: Pos, other: Pos) bool {
-        return self.x == other.x and self.y == other.y;
-    }
-};
-
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
-    var lines = std.ArrayList([]const u8).init(allocator);
-    defer lines.deinit();
-
-    var iter = std.mem.splitSequence(u8, input, "\n");
-    while (iter.next()) |line| {
-        if (line.len > 0) try lines.append(line);
-    }
-
-    return try lines.toOwnedSlice();
+    return states;
 }
 
-fn findRegions(allocator: std.mem.Allocator, grid: []const []const u8) ![]std.ArrayList(Pos) {
-    var regions = std.ArrayList(std.ArrayList(Pos)).init(allocator);
-    defer regions.deinit();
-
-    var visited = std.HashMap(Pos, void, PosContext, 80).init(allocator);
-    defer visited.deinit();
-
-    for (grid, 0..) |row, y| {
-        for (row, 0..) |_, x| {
-            const pos = Pos{ .x = @floatFromInt(x), .y = @floatFromInt(y) };
-
-            if (!visited.contains(pos)) {
-                var region = std.ArrayList(Pos).init(allocator);
-                try findRegion(grid, pos, &visited, &region);
-                try regions.append(region);
-            }
-        }
-    }
-
-    return try regions.toOwnedSlice();
-}
-
-fn findRegion(grid: []const []const u8, start_pos: Pos, visited: *std.HashMap(Pos, void, PosContext, 80), region: *std.ArrayList(Pos)) !void {
-    var queue = std.ArrayList(Pos).init(std.heap.page_allocator);
+fn solveState(state: State, allocator: std.mem.Allocator) !?i64 {
+    var queue = ArrayList(struct { x: i64, y: i64, a_presses: i64, b_presses: i64, tokens: i64 }).init(allocator);
     defer queue.deinit();
 
-    try queue.append(start_pos);
-    try visited.put(start_pos, {});
-    try region.append(start_pos);
+    var visited = AutoHashMap(struct { x: i64, y: i64, a_presses: i64, b_presses: i64 }, void).init(allocator);
+    defer visited.deinit();
 
-    const crop = grid[@intFromFloat(start_pos.y)][@intFromFloat(start_pos.x)];
+    try queue.append(.{ .x = 0, .y = 0, .a_presses = 0, .b_presses = 0, .tokens = 0 });
 
     while (queue.items.len > 0) {
         const current = queue.orderedRemove(0);
 
-        for (DIRECTIONS) |dir| {
-            const next_pos = current.add(dir);
-
-            if (next_pos.y < 0 or next_pos.x < 0 or
-                next_pos.y >= @as(f32, @floatFromInt(grid.len)) or next_pos.x >= @as(f32, @floatFromInt(grid[0].len))) continue;
-
-            if (grid[@intFromFloat(next_pos.y)][@intFromFloat(next_pos.x)] != crop) continue;
-            if (visited.contains(next_pos)) continue;
-
-            try visited.put(next_pos, {});
-            try region.append(next_pos);
-            try queue.append(next_pos);
+        if (current.x == state.target.x and current.y == state.target.y) {
+            return current.tokens;
         }
-    }
-}
 
-fn calculateSides(region: std.ArrayList(Pos)) usize {
-    var corner_candidates = std.HashMap(Pos, void, PosContext, 80).init(std.heap.page_allocator);
-    defer corner_candidates.deinit();
-
-    for (region.items) |pos| {
-        const corners = [4]Pos{
-            .{ .x = pos.x - 0.5, .y = pos.y - 0.5 },
-            .{ .x = pos.x + 0.5, .y = pos.y - 0.5 },
-            .{ .x = pos.x + 0.5, .y = pos.y + 0.5 },
-            .{ .x = pos.x - 0.5, .y = pos.y + 0.5 },
-        };
-
-        for (corners) |corner| {
-            _ = corner_candidates.put(corner, {}) catch {};
+        if (current.a_presses > 100 or current.b_presses > 100) {
+            continue;
         }
-    }
 
-    var corners: usize = 0;
-    var corner_iter = corner_candidates.keyIterator();
-    while (corner_iter.next()) |corner| {
-        const config = [4]bool{
-            isInRegion(region, .{ .x = corner.x - 0.5, .y = corner.y - 0.5 }),
-            isInRegion(region, .{ .x = corner.x + 0.5, .y = corner.y - 0.5 }),
-            isInRegion(region, .{ .x = corner.x + 0.5, .y = corner.y + 0.5 }),
-            isInRegion(region, .{ .x = corner.x - 0.5, .y = corner.y + 0.5 }),
-        };
+        const key = .{ .x = current.x, .y = current.y, .a_presses = current.a_presses, .b_presses = current.b_presses };
+        if (visited.contains(key)) continue;
+        try visited.put(key, {});
 
-        const num_true = countTrue(&config);
+        // Try A button
+        if (current.a_presses < 100) {
+            try queue.append(.{
+                .x = current.x + state.a_move.x,
+                .y = current.y + state.a_move.y,
+                .a_presses = current.a_presses + 1,
+                .b_presses = current.b_presses,
+                .tokens = current.tokens + 3,
+            });
+        }
 
-        if (num_true == 1) {
-            corners += 1;
-        } else if (num_true == 2) {
-            if ((config[0] and config[2]) or (config[1] and config[3])) {
-                corners += 2;
-            }
-        } else if (num_true == 3) {
-            corners += 1;
+        // Try B button
+        if (current.b_presses < 100) {
+            try queue.append(.{
+                .x = current.x + state.b_move.x,
+                .y = current.y + state.b_move.y,
+                .a_presses = current.a_presses,
+                .b_presses = current.b_presses + 1,
+                .tokens = current.tokens + 1,
+            });
         }
     }
 
-    return corners;
-}
-
-fn isInRegion(region: std.ArrayList(Pos), pos: Pos) bool {
-    for (region.items) |r_pos| {
-        if (r_pos.x == pos.x and r_pos.y == pos.y) return true;
-    }
-    return false;
-}
-
-fn countTrue(arr: []const bool) usize {
-    var count: usize = 0;
-    for (arr) |val| {
-        if (val) count += 1;
-    }
-    return count;
+    return null;
 }
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
 
     const input = @embedFile("input.txt");
-    const grid = try parseInput(allocator, input);
-    defer allocator.free(grid);
+    const states = try parseInput(allocator, input);
+    defer states.deinit();
 
-    const regions = try findRegions(allocator, grid);
-    defer {
-        for (regions) |region| {
-            region.deinit();
+    var total_tokens: i64 = 0;
+    for (states.items) |state| {
+        if (try solveState(state, allocator)) |tokens| {
+            total_tokens += tokens;
+        } else {
+            print("No solution for state\n", .{});
         }
-        allocator.free(regions);
     }
 
-    var total: usize = 0;
-    for (regions) |region| {
-        total += region.items.len * calculateSides(region);
-    }
-
-    std.debug.print("Result: {}\n", .{total});
+    print("Total tokens: {}\n", .{total_tokens});
 }
