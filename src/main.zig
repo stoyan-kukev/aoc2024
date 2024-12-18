@@ -1,75 +1,83 @@
 const std = @import("std");
 const print = std.debug.print;
-const ArrayList = std.ArrayList;
-const AutoHashMap = std.AutoHashMap;
 
-const State = struct {
-    a_move: Pos,
-    b_move: Pos,
-    target: Pos,
-
-    const Pos = struct {
-        x: f64,
-        y: f64,
-    };
+const Vec = struct {
+    x: isize,
+    y: isize,
 };
 
-fn parseCoord(str: []const u8, coord: u8) !f64 {
-    const index = std.mem.indexOfScalar(u8, str, coord) orelse return error.CoordNotFound;
-    var j = index + 2;
-    while (j < str.len and std.ascii.isDigit(str[j])) : (j += 1) {}
-    return @floatFromInt(try std.fmt.parseInt(i64, str[index + 2 .. j], 10));
+const Robot = struct {
+    pos: Vec,
+    dir: Vec,
+
+    pub fn format(
+        self: Robot,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.print("Pos: ({}, {}) Vec: ({}, {}", .{
+            self.pos.x, self.pos.y, self.dir.x, self.dir.y,
+        });
+
+        try writer.writeAll(")");
+    }
+};
+
+const map_bounds: Vec = .{
+    .x = 101,
+    .y = 103,
+};
+
+fn parseVec(str: []const u8) !Vec {
+    var iter = std.mem.splitSequence(u8, str[2..], ",");
+
+    const x = try std.fmt.parseInt(isize, iter.next().?, 10);
+    const y = try std.fmt.parseInt(isize, iter.next().?, 10);
+
+    return .{
+        .x = x,
+        .y = y,
+    };
 }
 
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ArrayList(State) {
-    var states = ArrayList(State).init(allocator);
-    errdefer states.deinit();
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Robot) {
+    var output = std.ArrayList(Robot).init(allocator);
 
-    var iter = std.mem.splitSequence(u8, input, "\n\n");
-    while (iter.next()) |machine| {
-        var line_iter = std.mem.splitScalar(u8, machine, '\n');
+    var iter = std.mem.splitSequence(u8, input, "\n");
+    while (iter.next()) |line| {
+        if (line.len < 1) continue;
 
-        const btn_a = line_iter.next() orelse return error.InvalidInput;
-        const btn_b = line_iter.next() orelse return error.InvalidInput;
-        const coords = line_iter.next() orelse return error.InvalidInput;
+        var str_iter = std.mem.splitSequence(u8, line, " ");
+        const pos = try parseVec(str_iter.next().?);
+        const dir = try parseVec(str_iter.next().?);
 
-        const state = State{
-            .a_move = .{
-                .x = try parseCoord(btn_a, 'X'),
-                .y = try parseCoord(btn_a, 'Y'),
-            },
-            .b_move = .{
-                .x = try parseCoord(btn_b, 'X'),
-                .y = try parseCoord(btn_b, 'Y'),
-            },
-            .target = .{
-                .x = try parseCoord(coords, 'X') + 10000000000000,
-                .y = try parseCoord(coords, 'Y') + 10000000000000,
-            },
-        };
-
-        try states.append(state);
+        try output.append(.{ .pos = pos, .dir = dir });
     }
 
-    return states;
+    return output;
 }
 
-fn solveState(state: State) i64 {
-    const n1 = state.target.x * state.b_move.y - state.target.y * state.b_move.x;
-    const dn1 = state.a_move.x * state.b_move.y - state.a_move.y * state.b_move.x;
+fn checkMiddleOfBounds(pos: Vec) bool {
+    const middleX = map_bounds.x / 2;
+    const middleY = map_bounds.y / 2;
 
-    const a = n1 / dn1;
+    const xIsOutsideMiddle =
+        if (map_bounds.x % 2 == 0)
+        pos.x < middleX or pos.x >= middleX + 2
+    else
+        pos.x != middleX;
 
-    const n2 = state.target.x - state.a_move.x * a;
-    const dn2 = state.b_move.x;
+    const yIsOutsideMiddle =
+        if (map_bounds.y % 2 == 0)
+        pos.y < middleY or pos.y >= middleY + 2
+    else
+        pos.y != middleY;
 
-    const b = n2 / dn2;
-
-    if (@mod(a, 1) == 0 and @mod(b, 1) == 0) {
-        return @intFromFloat(a * 3 + b);
-    }
-
-    return 0;
+    return xIsOutsideMiddle and yIsOutsideMiddle;
 }
 
 pub fn main() !void {
@@ -78,13 +86,39 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const input = @embedFile("input.txt");
-    const states = try parseInput(allocator, input);
-    defer states.deinit();
+    const robots = try parseInput(allocator, input);
+    defer robots.deinit();
 
-    var total_tokens: i64 = 0;
-    for (states.items) |state| {
-        total_tokens += solveState(state);
+    for (robots.items) |*robot| {
+        robot.pos.x += robot.dir.x * 100;
+        robot.pos.y += robot.dir.y * 100;
+
+        robot.pos.x = @mod(robot.pos.x, map_bounds.x);
+        robot.pos.y = @mod(robot.pos.y, map_bounds.y);
     }
 
-    print("Total tokens: {}\n", .{total_tokens});
+    var q1: usize = 0;
+    var q2: usize = 0;
+    var q3: usize = 0;
+    var q4: usize = 0;
+
+    for (robots.items) |robot| {
+        if (!checkMiddleOfBounds(robot.pos)) continue;
+
+        const isLeft = robot.pos.x < map_bounds.x / 2;
+        const isTop = robot.pos.y < map_bounds.y / 2;
+
+        if (isLeft and isTop) {
+            q1 += 1;
+        } else if (!isLeft and isTop) {
+            q2 += 1;
+        } else if (isLeft and !isTop) {
+            q3 += 1;
+        } else {
+            q4 += 1;
+        }
+    }
+    const safety_factor = q1 * q2 * q3 * q4;
+
+    print("Safety factor: {}\n", .{safety_factor});
 }
