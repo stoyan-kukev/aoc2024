@@ -1,163 +1,152 @@
 const std = @import("std");
 const print = std.debug.print;
 
-const Vec = struct {
-    row: isize,
-    col: isize,
+const State = struct {
+    x: usize,
+    y: usize,
+    dir: u8, // 0=right, 1=down, 2=left, 3=up
+};
 
-    fn eql(self: Vec, other: Vec) bool {
-        return self.row == other.row and self.col == other.col;
+const QueueItem = struct {
+    cost: u32,
+    forward_steps: u32,
+    turns: u32,
+    state: State,
+
+    pub fn lessThan(context: void, a: QueueItem, b: QueueItem) std.math.Order {
+        _ = context;
+        return std.math.order(a.cost, b.cost);
     }
+};
+
+const DIRS = [_][2]i32{
+    [_]i32{ 0, 1 },
+    [_]i32{ 1, 0 },
+    [_]i32{ 0, -1 },
+    [_]i32{ -1, 0 },
 };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
     defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
     const input = @embedFile("input.txt");
-    var sections = std.mem.splitSequence(u8, input, "\n\n");
-    const top = sections.next().?;
-    const bottom = sections.next().?;
 
-    var grid = std.ArrayList(std.ArrayList(u8)).init(allocator);
+    var lines = std.mem.split(u8, input, "\n");
+    var height: usize = 0;
+    var width: usize = 0;
+    {
+        var line_it = lines;
+        while (line_it.next()) |line| {
+            if (line.len == 0) continue;
+            width = line.len;
+            height += 1;
+        }
+    }
+
+    var maze = try allocator.alloc([]u8, height);
+    for (maze) |*row| {
+        row.* = try allocator.alloc(u8, width);
+    }
     defer {
-        for (grid.items) |*row| {
-            row.deinit();
+        for (maze) |row| {
+            allocator.free(row);
         }
-        grid.deinit();
+        allocator.free(maze);
     }
 
-    var lines = std.mem.splitSequence(u8, top, "\n");
-    while (lines.next()) |line| {
-        if (line.len == 0) continue;
-        var row = std.ArrayList(u8).init(allocator);
-
-        for (line) |char| {
-            switch (char) {
-                '#' => try row.appendSlice("##"),
-                'O' => try row.appendSlice("[]"),
-                '.' => try row.appendSlice(".."),
-                '@' => try row.appendSlice("@."),
-                else => {},
+    var start = State{ .y = 0, .x = 0, .dir = 0 };
+    var end = State{ .y = 0, .x = 0, .dir = 0 };
+    {
+        lines = std.mem.split(u8, input, "\n");
+        var y: usize = 0;
+        while (lines.next()) |line| {
+            if (line.len == 0) continue;
+            for (line, 0..) |char, x| {
+                maze[y][x] = char;
+                if (char == 'S') {
+                    start = .{ .y = y, .x = x, .dir = 0 };
+                } else if (char == 'E') {
+                    end = .{ .y = y, .x = x, .dir = 0 };
+                }
             }
+            y += 1;
         }
-        try grid.append(row);
     }
 
-    var moves = std.ArrayList(Vec).init(allocator);
-    defer moves.deinit();
+    var visited = std.AutoHashMap(State, u32).init(allocator);
+    defer visited.deinit();
 
-    for (bottom) |char| {
-        if (char == '\n') continue;
-        try moves.append(switch (char) {
-            '^' => .{ .row = -1, .col = 0 },
-            'v' => .{ .row = 1, .col = 0 },
-            '<' => .{ .row = 0, .col = -1 },
-            '>' => .{ .row = 0, .col = 1 },
-            else => continue,
-        });
-    }
+    var pq = std.PriorityQueue(QueueItem, void, QueueItem.lessThan).init(allocator, {});
+    defer pq.deinit();
 
-    var robot = blk: {
-        for (grid.items, 0..) |row, r| {
-            for (row.items, 0..) |cell, c| {
-                if (cell == '@') {
-                    break :blk Vec{ .row = @intCast(r), .col = @intCast(c) };
+    try pq.add(.{
+        .cost = 0,
+        .forward_steps = 0,
+        .turns = 0,
+        .state = start,
+    });
+    try visited.put(start, 0);
+
+    while (pq.count() > 0) {
+        const current = pq.remove();
+        const state = current.state;
+
+        if (state.y == end.y and state.x == end.x) {
+            print("Total cost: {}\n", .{current.cost});
+            return;
+        }
+
+        const dir = DIRS[state.dir];
+        const new_y = @as(i32, @intCast(state.y)) + dir[0];
+        const new_x = @as(i32, @intCast(state.x)) + dir[1];
+
+        if (new_y >= 0 and new_y < height and new_x >= 0 and new_x < width) {
+            const new_y_usize = @as(usize, @intCast(new_y));
+            const new_x_usize = @as(usize, @intCast(new_x));
+
+            if (maze[new_y_usize][new_x_usize] != '#') {
+                const new_state = State{
+                    .y = new_y_usize,
+                    .x = new_x_usize,
+                    .dir = state.dir,
+                };
+                const new_cost = current.cost + 1;
+
+                if (visited.get(new_state) == null or visited.get(new_state).? > new_cost) {
+                    try visited.put(new_state, new_cost);
+                    try pq.add(.{
+                        .cost = new_cost,
+                        .forward_steps = current.forward_steps + 1,
+                        .turns = current.turns,
+                        .state = new_state,
+                    });
                 }
             }
         }
-        unreachable;
-    };
 
-    for (moves.items) |move| {
-        var targets = std.ArrayList(Vec).init(allocator);
-        defer targets.deinit();
-
-        try targets.append(robot);
-        var i: usize = 0;
-        var can_move = true;
-
-        while (i < targets.items.len) : (i += 1) {
-            const current = targets.items[i];
-            const next = Vec{
-                .row = current.row + move.row,
-                .col = current.col + move.col,
+        // Try turning left and right
+        for ([_]i32{ -1, 1 }) |turn| {
+            const new_dir = @as(u8, @intCast(@mod(@as(i32, @intCast(state.dir)) + turn + 4, 4)));
+            const new_state = State{
+                .y = state.y,
+                .x = state.x,
+                .dir = new_dir,
             };
+            const new_cost = current.cost + 1000;
 
-            if (next.row < 0 or next.col < 0 or
-                next.row >= grid.items.len or
-                next.col >= grid.items[0].items.len)
-            {
-                can_move = false;
-                break;
-            }
-
-            var already_in_targets = false;
-            for (targets.items) |target| {
-                if (target.eql(next)) {
-                    already_in_targets = true;
-                    break;
-                }
-            }
-            if (already_in_targets) continue;
-
-            const next_char = grid.items[@intCast(next.row)].items[@intCast(next.col)];
-            if (next_char == '#') {
-                can_move = false;
-                break;
-            }
-
-            if (next_char == '[') {
-                try targets.append(next);
-                try targets.append(.{ .row = next.row, .col = next.col + 1 });
-            }
-            if (next_char == ']') {
-                try targets.append(next);
-                try targets.append(.{ .row = next.row, .col = next.col - 1 });
-            }
-        }
-
-        if (can_move) {
-            var grid_copy = std.ArrayList(std.ArrayList(u8)).init(allocator);
-            defer {
-                for (grid_copy.items) |*row| {
-                    row.deinit();
-                }
-                grid_copy.deinit();
-            }
-
-            for (grid.items) |row| {
-                var new_row = std.ArrayList(u8).init(allocator);
-                try new_row.appendSlice(row.items);
-                try grid_copy.append(new_row);
-            }
-
-            grid.items[@intCast(robot.row)].items[@intCast(robot.col)] = '.';
-            robot.row += move.row;
-            robot.col += move.col;
-            grid.items[@intCast(robot.row)].items[@intCast(robot.col)] = '@';
-
-            for (targets.items[1..]) |target| {
-                grid.items[@intCast(target.row)].items[@intCast(target.col)] = '.';
-            }
-            for (targets.items[1..]) |target| {
-                const old_char = grid_copy.items[@intCast(target.row)].items[@intCast(target.col)];
-                grid.items[@intCast(target.row + move.row)].items[@intCast(target.col + move.col)] = old_char;
+            if (visited.get(new_state) == null or visited.get(new_state).? > new_cost) {
+                try visited.put(new_state, new_cost);
+                try pq.add(.{
+                    .cost = new_cost,
+                    .forward_steps = current.forward_steps,
+                    .turns = current.turns + 1,
+                    .state = new_state,
+                });
             }
         }
     }
 
-    // Calculate sum
-    // NOTE: The left-most point of the box is always the left side [ of it
-    var sum: usize = 0;
-    for (grid.items, 0..) |row, r| {
-        for (row.items, 0..) |cell, c| {
-            if (cell == '[') {
-                sum += 100 * r + c;
-            }
-        }
-    }
-
-    print("Sum: {}\n", .{sum});
+    print("No solution found\n", .{});
 }
