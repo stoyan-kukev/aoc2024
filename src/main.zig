@@ -2,126 +2,13 @@ const std = @import("std");
 const print = std.debug.print;
 
 const Vec = struct {
-    x: isize,
-    y: isize,
+    row: isize,
+    col: isize,
 
-    fn add(self: Vec, other: Vec) Vec {
-        return .{
-            .x = self.x + other.x,
-            .y = self.y + other.y,
-        };
+    fn eql(self: Vec, other: Vec) bool {
+        return self.row == other.row and self.col == other.col;
     }
 };
-
-var dir_map = std.StaticStringMap(Vec).initComptime(&.{
-    .{ "^", .{ .x = 0, .y = -1 } },
-    .{ ">", .{ .x = 1, .y = 0 } },
-    .{ "v", .{ .x = 0, .y = 1 } },
-    .{ "<", .{ .x = -1, .y = 0 } },
-});
-
-const Map = std.ArrayList([]u8);
-const Moves = std.ArrayList(Vec);
-
-const ParsedInput = struct {
-    map: Map,
-    moves: Moves,
-};
-
-fn parseInput(allocator: std.mem.Allocator, input: []const u8) !ParsedInput {
-    var section_split = std.mem.splitSequence(u8, input, "\n\n");
-    const map_section = section_split.next().?;
-    const moves_section = section_split.next().?;
-
-    var map = Map.init(allocator);
-    errdefer {
-        for (map.items) |row| {
-            allocator.free(row);
-        }
-        map.deinit();
-    }
-
-    var map_iter = std.mem.splitSequence(u8, map_section, "\n");
-    while (map_iter.next()) |row| {
-        if (row.len < 1) continue;
-
-        try map.append(try allocator.dupe(u8, row));
-    }
-
-    var moves = Moves.init(allocator);
-    errdefer moves.deinit();
-
-    for (moves_section) |char| {
-        if (char == '\n') continue;
-
-        try moves.append(dir_map.get(&.{char}) orelse return error.What);
-    }
-
-    return .{
-        .map = map,
-        .moves = moves,
-    };
-}
-
-fn moveBox(map: *Map, pos: Vec, dir: Vec) bool {
-    const new_pos = pos.add(dir);
-
-    if (new_pos.x > map.items[0].len or new_pos.y > map.items.len) {
-        return false;
-    }
-
-    if (map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] == '#') {
-        return false;
-    }
-
-    var can_move = true;
-
-    if (map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] == 'O') {
-        can_move = moveBox(map, new_pos, dir);
-    }
-
-    if (can_move) {
-        map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] = 'O';
-        map.items[@intCast(pos.y)][@intCast(pos.x)] = '.';
-
-        return true;
-    }
-
-    return false;
-}
-
-fn moveRobot(map: *Map, pos: *Vec, dir: Vec) void {
-    const new_pos = pos.add(dir);
-
-    if (new_pos.x > map.items[0].len or new_pos.y > map.items.len) {
-        return;
-    }
-
-    if (map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] == '#') {
-        return;
-    }
-
-    var can_move = true;
-
-    if (map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] == 'O') {
-        can_move = moveBox(map, new_pos, dir);
-    }
-
-    if (can_move) {
-        map.items[@intCast(new_pos.y)][@intCast(new_pos.x)] = '@';
-        map.items[@intCast(pos.y)][@intCast(pos.x)] = '.';
-        pos.* = new_pos;
-    }
-}
-
-fn printMap(map: *Map) void {
-    for (map.items) |row| {
-        for (row) |cell| {
-            print("{c}", .{cell});
-        }
-        print("\n", .{});
-    }
-}
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -129,39 +16,145 @@ pub fn main() !void {
     defer _ = gpa.deinit();
 
     const input = @embedFile("input.txt");
-    var parsed_input = try parseInput(allocator, input);
+    var sections = std.mem.splitSequence(u8, input, "\n\n");
+    const top = sections.next().?;
+    const bottom = sections.next().?;
+
+    var grid = std.ArrayList(std.ArrayList(u8)).init(allocator);
     defer {
-        parsed_input.moves.deinit();
-        for (parsed_input.map.items) |row| {
-            allocator.free(row);
+        for (grid.items) |*row| {
+            row.deinit();
         }
-        parsed_input.map.deinit();
+        grid.deinit();
     }
 
-    var robot_pos: Vec = blk: {
-        for (parsed_input.map.items, 0..) |row, y| {
-            for (row, 0..) |_, x| {
-                if (parsed_input.map.items[y][x] == '@') {
-                    break :blk .{
-                        .x = @intCast(x),
-                        .y = @intCast(y),
-                    };
+    var lines = std.mem.splitSequence(u8, top, "\n");
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var row = std.ArrayList(u8).init(allocator);
+
+        for (line) |char| {
+            switch (char) {
+                '#' => try row.appendSlice("##"),
+                'O' => try row.appendSlice("[]"),
+                '.' => try row.appendSlice(".."),
+                '@' => try row.appendSlice("@."),
+                else => {},
+            }
+        }
+        try grid.append(row);
+    }
+
+    var moves = std.ArrayList(Vec).init(allocator);
+    defer moves.deinit();
+
+    for (bottom) |char| {
+        if (char == '\n') continue;
+        try moves.append(switch (char) {
+            '^' => .{ .row = -1, .col = 0 },
+            'v' => .{ .row = 1, .col = 0 },
+            '<' => .{ .row = 0, .col = -1 },
+            '>' => .{ .row = 0, .col = 1 },
+            else => continue,
+        });
+    }
+
+    var robot = blk: {
+        for (grid.items, 0..) |row, r| {
+            for (row.items, 0..) |cell, c| {
+                if (cell == '@') {
+                    break :blk Vec{ .row = @intCast(r), .col = @intCast(c) };
                 }
             }
         }
+        unreachable;
     };
 
-    while (parsed_input.moves.items.len > 0) {
-        const dir = parsed_input.moves.orderedRemove(0);
-        moveRobot(&parsed_input.map, &robot_pos, dir);
+    for (moves.items) |move| {
+        var targets = std.ArrayList(Vec).init(allocator);
+        defer targets.deinit();
+
+        try targets.append(robot);
+        var i: usize = 0;
+        var can_move = true;
+
+        while (i < targets.items.len) : (i += 1) {
+            const current = targets.items[i];
+            const next = Vec{
+                .row = current.row + move.row,
+                .col = current.col + move.col,
+            };
+
+            if (next.row < 0 or next.col < 0 or
+                next.row >= grid.items.len or
+                next.col >= grid.items[0].items.len)
+            {
+                can_move = false;
+                break;
+            }
+
+            var already_in_targets = false;
+            for (targets.items) |target| {
+                if (target.eql(next)) {
+                    already_in_targets = true;
+                    break;
+                }
+            }
+            if (already_in_targets) continue;
+
+            const next_char = grid.items[@intCast(next.row)].items[@intCast(next.col)];
+            if (next_char == '#') {
+                can_move = false;
+                break;
+            }
+
+            if (next_char == '[') {
+                try targets.append(next);
+                try targets.append(.{ .row = next.row, .col = next.col + 1 });
+            }
+            if (next_char == ']') {
+                try targets.append(next);
+                try targets.append(.{ .row = next.row, .col = next.col - 1 });
+            }
+        }
+
+        if (can_move) {
+            var grid_copy = std.ArrayList(std.ArrayList(u8)).init(allocator);
+            defer {
+                for (grid_copy.items) |*row| {
+                    row.deinit();
+                }
+                grid_copy.deinit();
+            }
+
+            for (grid.items) |row| {
+                var new_row = std.ArrayList(u8).init(allocator);
+                try new_row.appendSlice(row.items);
+                try grid_copy.append(new_row);
+            }
+
+            grid.items[@intCast(robot.row)].items[@intCast(robot.col)] = '.';
+            robot.row += move.row;
+            robot.col += move.col;
+            grid.items[@intCast(robot.row)].items[@intCast(robot.col)] = '@';
+
+            for (targets.items[1..]) |target| {
+                grid.items[@intCast(target.row)].items[@intCast(target.col)] = '.';
+            }
+            for (targets.items[1..]) |target| {
+                const old_char = grid_copy.items[@intCast(target.row)].items[@intCast(target.col)];
+                grid.items[@intCast(target.row + move.row)].items[@intCast(target.col + move.col)] = old_char;
+            }
+        }
     }
 
+    // Calculate sum
+    // NOTE: The left-most point of the box is always the left side [ of it
     var sum: usize = 0;
-
-    for (parsed_input.map.items, 0..) |row, y| {
-        for (row, 0..) |_, x| {
-            if (parsed_input.map.items[y][x] == 'O') {
-                sum += 100 * y + x;
+    for (grid.items, 0..) |row, r| {
+        for (row.items, 0..) |cell, c| {
+            if (cell == '[') {
+                sum += 100 * r + c;
             }
         }
     }
