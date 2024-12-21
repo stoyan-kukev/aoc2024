@@ -2,9 +2,9 @@ const std = @import("std");
 const print = std.debug.print;
 
 const Regs = struct {
-    a: i64,
-    b: i64,
-    c: i64,
+    a: i64 = 0,
+    b: i64 = 0,
+    c: i64 = 0,
     rip: usize = 0,
 };
 
@@ -123,6 +123,37 @@ fn executeInstruction(state: *State, instr: Instruction) !void {
     }
 }
 
+fn convertInstructionsToOutput(allocator: std.mem.Allocator, slice: []Instruction) !std.ArrayList(i64) {
+    var output = std.ArrayList(i64).init(allocator);
+
+    for (slice) |item| {
+        try output.append(item.opcode);
+        try output.append(item.operand);
+    }
+
+    return output;
+}
+
+fn getOutputsFromComputer(
+    allocator: std.mem.Allocator,
+    a: i64,
+    regs: Regs,
+    instructions: *const std.ArrayList(Instruction),
+) ![]i64 {
+    var local_regs = regs;
+    local_regs.a = a;
+
+    var state = State.init(allocator, local_regs);
+    defer state.deinit();
+
+    while (state.regs.rip != instructions.items.len) {
+        const instruction = instructions.items[state.regs.rip];
+        try executeInstruction(&state, instruction);
+    }
+
+    return try state.output.toOwnedSlice();
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -134,23 +165,44 @@ pub fn main() !void {
 
     const regs_section = section_iter.next().?;
     const regs = try parseRegsFromInput(regs_section);
-    var state = State.init(allocator, regs);
-    defer state.deinit();
 
     const program_section = section_iter.next().?;
     const instructions = try parseInstructionsFromInput(allocator, program_section);
     defer instructions.deinit();
 
-    while (state.regs.rip != instructions.items.len) {
-        const instruction = instructions.items[state.regs.rip];
-        try executeInstruction(&state, instruction);
+    var candidates = std.ArrayList(i64).init(allocator);
+    defer candidates.deinit();
+
+    try candidates.append(0);
+    for (0..instructions.items.len) |l| {
+        var next_candidates = std.ArrayList(i64).init(allocator);
+        defer next_candidates.deinit();
+
+        for (candidates.items) |val| {
+            for (0..8) |i| {
+                const target = (val << 3) + @as(i64, @intCast(i));
+
+                const outputs = try getOutputsFromComputer(allocator, target, regs, &instructions);
+                defer allocator.free(outputs);
+
+                const program_suffix = instructions.items[instructions.items.len - l - 1 ..];
+                const programs = try convertInstructionsToOutput(allocator, program_suffix);
+                defer programs.deinit();
+
+                if (std.mem.eql(i64, outputs, programs.items)) {
+                    print("      Match found: {}\n", .{target});
+                    try next_candidates.append(target);
+                }
+            }
+        }
+
+        candidates.clearAndFree();
+        try candidates.appendSlice(next_candidates.items);
     }
 
-    print("Answer: ", .{});
-    var i: usize = 0;
-    while (i < state.output.items.len) : (i += 1) {
-        print("{}", .{state.output.items[i]});
-        if (i != state.output.items.len - 1) print(",", .{});
+    if (candidates.items.len == 0) {
+        print("No valid candidates found.\n", .{});
+        return;
     }
-    print("\n", .{});
+    print("Answer: {}\n", .{std.mem.min(i64, candidates.items)});
 }
