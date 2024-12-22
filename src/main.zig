@@ -1,157 +1,87 @@
 const std = @import("std");
 const print = std.debug.print;
 
-const Regs = struct {
-    a: i64 = 0,
-    b: i64 = 0,
-    c: i64 = 0,
-    rip: usize = 0,
+const width = 71;
+const height = 71;
+
+const Pos = struct {
+    row: isize,
+    col: isize,
 };
 
-const Opcode = u3;
+fn parseInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Pos) {
+    var output = std.ArrayList(Pos).init(allocator);
 
-const Instruction = struct {
-    opcode: Opcode,
-    operand: Opcode,
+    var input_iter = std.mem.splitSequence(u8, input, "\n");
+    while (input_iter.next()) |line| {
+        if (line.len < 1) continue;
+
+        var num_iter = std.mem.splitSequence(u8, line, ",");
+        const row = try std.fmt.parseInt(isize, num_iter.next().?, 10);
+        const col = try std.fmt.parseInt(isize, num_iter.next().?, 10);
+
+        try output.append(.{ .row = row, .col = col });
+    }
+
+    return output;
+}
+
+const DIRECTIONS = [4]Pos{
+    .{ .row = 1, .col = 0 },
+    .{ .row = 0, .col = 1 },
+    .{ .row = -1, .col = 0 },
+    .{ .row = 0, .col = -1 },
 };
 
 const State = struct {
-    const Self = @This();
-
-    regs: Regs,
-    output: std.ArrayList(i64),
-
-    fn init(allocator: std.mem.Allocator, regs: Regs) State {
-        var state: State = undefined;
-        state.regs = regs;
-        state.output = std.ArrayList(i64).init(allocator);
-
-        return state;
-    }
-
-    fn deinit(self: *Self) void {
-        self.output.deinit();
-    }
+    pos: Pos,
+    steps: usize,
 };
 
-fn parseRegsFromInput(input: []const u8) !Regs {
-    var output: Regs = undefined;
+fn findPath(allocator: std.mem.Allocator, blocks: []Pos, progress: usize) !usize {
+    var queue = std.ArrayList(State).init(allocator);
+    defer queue.deinit();
 
-    var input_iter = std.mem.splitSequence(u8, input, "\n");
-    inline for (&.{ "a", "b", "c" }) |field| {
-        const str = input_iter.next().?;
-        var str_iter = std.mem.splitSequence(u8, str, ":");
-        _ = str_iter.next().?;
+    try queue.append(.{ .pos = .{ .row = 0, .col = 0 }, .steps = 0 });
 
-        const num = std.mem.trim(u8, str_iter.next().?, " ");
-        @field(output, field) = try std.fmt.parseInt(i64, num, 10);
-    }
+    var visited = std.AutoHashMap(Pos, void).init(allocator);
+    defer visited.deinit();
 
-    output.rip = 0;
+    while (queue.items.len > 0) {
+        const state = queue.orderedRemove(0);
 
-    return output;
-}
+        if (visited.get(.{ .row = state.pos.row, .col = state.pos.col }) != null) {
+            continue;
+        }
 
-fn parseInstructionsFromInput(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(Instruction) {
-    var instructions = std.ArrayList(Instruction).init(allocator);
-    errdefer instructions.deinit();
+        try visited.put(.{ .row = state.pos.row, .col = state.pos.col }, {});
 
-    var str_iter = std.mem.splitSequence(u8, input, ":");
-    _ = str_iter.next().?;
+        if (state.pos.row == width - 1 and state.pos.col == height - 1) {
+            return state.steps;
+        }
 
-    const opcodes = std.mem.trim(u8, std.mem.trim(u8, str_iter.next().?, "\n"), " ");
-    var opcodes_iter = std.mem.splitSequence(u8, opcodes, ",");
-    while (opcodes_iter.next()) |opcode| {
-        const instr = try std.fmt.parseInt(u3, opcode, 10);
-        const operand = try std.fmt.parseInt(u3, opcodes_iter.next().?, 10);
+        for (DIRECTIONS) |dir| {
+            const new_row = state.pos.row + dir.row;
+            const new_col = state.pos.col + dir.col;
 
-        try instructions.append(.{ .opcode = instr, .operand = operand });
-    }
+            const is_in_bounds = new_row >= 0 and new_row < width and new_col >= 0 and new_col < height;
+            const is_blockade = blk: {
+                for (blocks[0..progress]) |item| {
+                    if (item.row == new_row and item.col == new_col) {
+                        break :blk true;
+                    }
+                }
 
-    return instructions;
-}
+                break :blk false;
+            };
 
-fn getComboOperand(state: *State, operand: Opcode) i64 {
-    return switch (operand) {
-        0, 1, 2, 3 => @intCast(operand),
-        4 => state.regs.a,
-        5 => state.regs.b,
-        6 => state.regs.c,
-        else => unreachable,
-    };
-}
-
-fn executeInstruction(state: *State, instr: Instruction) !void {
-    var should_inc_rip = true;
-
-    switch (instr.opcode) {
-        0 => {
-            const combo_operand = std.math.pow(i64, 2, getComboOperand(state, instr.operand));
-            state.regs.a = @divTrunc(state.regs.a, combo_operand);
-        },
-        1 => {
-            state.regs.b ^= instr.operand;
-        },
-        2 => {
-            state.regs.b = @mod(getComboOperand(state, instr.operand), 8);
-        },
-        3 => {
-            if (state.regs.a != 0) {
-                state.regs.rip = instr.operand;
-                should_inc_rip = false;
+            if (is_in_bounds and !is_blockade) {
+                try queue.append(.{ .pos = .{ .row = new_row, .col = new_col }, .steps = state.steps + 1 });
             }
-        },
-        4 => {
-            state.regs.b ^= state.regs.c;
-        },
-        5 => {
-            const val = @mod(getComboOperand(state, instr.operand), 8);
-            try state.output.append(val);
-        },
-        6 => {
-            const combo_operand = std.math.pow(i64, 2, getComboOperand(state, instr.operand));
-            state.regs.b = @divTrunc(state.regs.a, combo_operand);
-        },
-        7 => {
-            const combo_operand = std.math.pow(i64, 2, getComboOperand(state, instr.operand));
-            state.regs.c = @divTrunc(state.regs.a, combo_operand);
-        },
+        }
     }
 
-    if (should_inc_rip) {
-        state.regs.rip += 1;
-    }
-}
-
-fn convertInstructionsToOutput(allocator: std.mem.Allocator, slice: []Instruction) !std.ArrayList(i64) {
-    var output = std.ArrayList(i64).init(allocator);
-
-    for (slice) |item| {
-        try output.append(item.opcode);
-        try output.append(item.operand);
-    }
-
-    return output;
-}
-
-fn getOutputsFromComputer(
-    allocator: std.mem.Allocator,
-    a: i64,
-    regs: Regs,
-    instructions: *const std.ArrayList(Instruction),
-) ![]i64 {
-    var local_regs = regs;
-    local_regs.a = a;
-
-    var state = State.init(allocator, local_regs);
-    defer state.deinit();
-
-    while (state.regs.rip != instructions.items.len) {
-        const instruction = instructions.items[state.regs.rip];
-        try executeInstruction(&state, instruction);
-    }
-
-    return try state.output.toOwnedSlice();
+    return error.NoPathFound;
 }
 
 pub fn main() !void {
@@ -161,48 +91,10 @@ pub fn main() !void {
 
     const input = @embedFile("input.txt");
 
-    var section_iter = std.mem.splitSequence(u8, input, "\n\n");
+    const blocks = try parseInput(allocator, input);
+    defer blocks.deinit();
 
-    const regs_section = section_iter.next().?;
-    const regs = try parseRegsFromInput(regs_section);
-
-    const program_section = section_iter.next().?;
-    const instructions = try parseInstructionsFromInput(allocator, program_section);
-    defer instructions.deinit();
-
-    var candidates = std.ArrayList(i64).init(allocator);
-    defer candidates.deinit();
-
-    try candidates.append(0);
-    for (0..instructions.items.len) |l| {
-        var next_candidates = std.ArrayList(i64).init(allocator);
-        defer next_candidates.deinit();
-
-        for (candidates.items) |val| {
-            for (0..8) |i| {
-                const target = (val << 3) + @as(i64, @intCast(i));
-
-                const outputs = try getOutputsFromComputer(allocator, target, regs, &instructions);
-                defer allocator.free(outputs);
-
-                const program_suffix = instructions.items[instructions.items.len - l - 1 ..];
-                const programs = try convertInstructionsToOutput(allocator, program_suffix);
-                defer programs.deinit();
-
-                if (std.mem.eql(i64, outputs, programs.items)) {
-                    print("      Match found: {}\n", .{target});
-                    try next_candidates.append(target);
-                }
-            }
-        }
-
-        candidates.clearAndFree();
-        try candidates.appendSlice(next_candidates.items);
-    }
-
-    if (candidates.items.len == 0) {
-        print("No valid candidates found.\n", .{});
-        return;
-    }
-    print("Answer: {}\n", .{std.mem.min(i64, candidates.items)});
+    const fallen_bytes = 1024;
+    const needed_steps = try findPath(allocator, blocks.items, fallen_bytes);
+    print("{}\n", .{needed_steps});
 }
