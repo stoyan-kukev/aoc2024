@@ -93,7 +93,7 @@ pub fn main() !void {
     var shortcuts = std.AutoHashMap(isize, usize).init(allocator);
     defer shortcuts.deinit();
 
-    const allowed_timeskip = 2;
+    const allowed_timeskip = 20;
     const target_time_to_save = 100;
 
     for (0..grid.len) |col| {
