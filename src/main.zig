@@ -94,7 +94,17 @@ pub fn main() !void {
     const blocks = try parseInput(allocator, input);
     defer blocks.deinit();
 
-    const fallen_bytes = 1024;
-    const needed_steps = try findPath(allocator, blocks.items, fallen_bytes);
-    print("{}\n", .{needed_steps});
+    var low: usize = 0;
+    var high: usize = blocks.items.len - 1;
+
+    while (low != high) {
+        const mid = @divFloor(low + high, 2);
+        if (findPath(allocator, blocks.items, mid + 1) == error.NoPathFound) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+
+    print("Answer pos: {any}\n", .{blocks.items[low]});
 }
