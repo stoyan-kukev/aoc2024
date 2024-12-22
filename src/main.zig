@@ -25,20 +25,26 @@ fn parseDesigns(allocator: std.mem.Allocator, input: []const u8) !std.ArrayList(
     return output;
 }
 
-fn validPattern(design: []u8, patterns: [][]u8) bool {
+fn validPattern(design: []u8, patterns: [][]u8, cache: *std.StringHashMap(usize)) !usize {
     if (design.len == 0) {
-        return true;
+        return 1;
     }
+
+    if (cache.get(design)) |val| {
+        return val;
+    }
+
+    var count: usize = 0;
 
     for (patterns) |pattern| {
         if (std.mem.startsWith(u8, design, pattern)) {
-            if (validPattern(design[pattern.len..], patterns)) {
-                return true;
-            }
+            count += try validPattern(design[pattern.len..], patterns, cache);
         }
     }
 
-    return false;
+    try cache.put(design, count);
+
+    return count;
 }
 
 pub fn main() !void {
@@ -68,12 +74,13 @@ pub fn main() !void {
         designs.deinit();
     }
 
-    var valid_designs: usize = 0;
+    var cache = std.StringHashMap(usize).init(allocator);
+    defer cache.deinit();
+
+    var possible_designs: usize = 0;
     for (designs.items) |design| {
-        if (validPattern(design, patterns.items)) {
-            valid_designs += 1;
-        }
+        possible_designs += try validPattern(design, patterns.items, &cache);
     }
 
-    print("Valid designs: {}\n", .{valid_designs});
+    print("Possible designs: {}\n", .{possible_designs});
 }
