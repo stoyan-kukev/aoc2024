@@ -291,7 +291,7 @@ pub fn main() !void {
         for (solutions) |solution| {
             const length = try computeLength(
                 solution,
-                2,
+                25,
                 &dir_seqs,
                 &dir_lengths,
                 &memo,
