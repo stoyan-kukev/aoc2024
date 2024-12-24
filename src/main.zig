@@ -1,12 +1,120 @@
 const std = @import("std");
 const print = std.debug.print;
 
-fn nextNum(x: usize) usize {
-    var result = x;
-    result ^= (result * 64) % 16777216;
-    result ^= (result / 32) % 16777216;
-    result ^= (result * 2048) % 16777216;
-    return result;
+pub const NetworkGraph = struct {
+    connections: std.StringHashMap(std.StringHashMap(void)),
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) NetworkGraph {
+        return .{
+            .connections = std.StringHashMap(std.StringHashMap(void)).init(allocator),
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *NetworkGraph) void {
+        var it = self.connections.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
+        }
+        self.connections.deinit();
+    }
+
+    pub fn addConnection(self: *NetworkGraph, comp1: []const u8, comp2: []const u8) !void {
+        if (self.connections.getPtr(comp1)) |neighbors| {
+            try neighbors.put(comp2, {});
+        } else {
+            var map = std.StringHashMap(void).init(self.allocator);
+            try map.put(comp2, {});
+            try self.connections.put(comp1, map);
+        }
+
+        if (self.connections.getPtr(comp2)) |neighbors| {
+            try neighbors.put(comp1, {});
+        } else {
+            var map = std.StringHashMap(void).init(self.allocator);
+            try map.put(comp1, {});
+            try self.connections.put(comp2, map);
+        }
+    }
+
+    pub fn areConnected(self: *const NetworkGraph, comp1: []const u8, comp2: []const u8) bool {
+        if (self.connections.get(comp1)) |neighbors| {
+            return neighbors.contains(comp2);
+        }
+
+        return false;
+    }
+
+    fn canonicalTriangle(allocator: std.mem.Allocator, parts: [3][]const u8) ![]u8 {
+        var sorted = parts;
+
+        for (0..2) |i| {
+            for (0..2 - i) |j| {
+                if (std.mem.lessThan(u8, sorted[j + 1], sorted[j])) {
+                    const temp = sorted[j];
+                    sorted[j] = sorted[j + 1];
+                    sorted[j + 1] = temp;
+                }
+            }
+        }
+
+        return std.fmt.allocPrint(allocator, "{s} {s} {s}", .{ sorted[0], sorted[1], sorted[2] });
+    }
+
+    pub fn findTrianglesWithT(self: *const NetworkGraph) !std.ArrayList([]u8) {
+        var result = std.ArrayList([]u8).init(self.allocator);
+        errdefer {
+            for (result.items) |item| {
+                self.allocator.free(item);
+            }
+            result.deinit();
+        }
+
+        var seen = std.StringHashMap(void).init(self.allocator);
+        defer seen.deinit();
+
+        var it = self.connections.iterator();
+        while (it.next()) |entry1| {
+            const comp1 = entry1.key_ptr.*;
+
+            var it2 = entry1.value_ptr.keyIterator();
+            while (it2.next()) |comp2| {
+                var it3 = entry1.value_ptr.keyIterator();
+
+                while (it3.next()) |comp3| {
+                    if (!std.mem.eql(u8, comp2.*, comp3.*) and self.areConnected(comp2.*, comp3.*)) {
+                        if (comp1[0] == 't' or comp2.*[0] == 't' or comp3.*[0] == 't') {
+                            const triangle = try canonicalTriangle(self.allocator, .{ comp1, comp2.*, comp3.* });
+
+                            if (try seen.fetchPut(triangle, {}) == null) {
+                                try result.append(triangle);
+                            } else {
+                                self.allocator.free(triangle);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
+    }
+};
+
+pub fn parseInput(allocator: std.mem.Allocator, input: []const u8) !NetworkGraph {
+    var graph = NetworkGraph.init(allocator);
+    var lines = std.mem.split(u8, input, "\n");
+
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        var parts = std.mem.split(u8, line, "-");
+        const comp1 = parts.next() orelse return error.InvalidInput;
+        const comp2 = parts.next() orelse return error.InvalidInput;
+        try graph.addConnection(comp1, comp2);
+    }
+
+    return graph;
 }
 
 pub fn main() !void {
@@ -14,63 +122,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var nums = std.ArrayList(usize).init(allocator);
-    defer nums.deinit();
-
     const input = @embedFile("input.txt");
-    var input_iter = std.mem.splitScalar(u8, input, '\n');
-    while (input_iter.next()) |line| {
-        if (line.len < 1) continue;
+    var net_graph = try parseInput(allocator, input);
+    defer net_graph.deinit();
 
-        try nums.append(try std.fmt.parseInt(usize, std.mem.trim(u8, line, "\n"), 10));
+    var triangles = try net_graph.findTrianglesWithT();
+    defer {
+        for (triangles.items) |t| allocator.free(t);
+        triangles.deinit();
     }
 
-    var seq_totals = std.AutoHashMap([4]i64, usize).init(allocator);
-    defer seq_totals.deinit();
-
-    for (nums.items) |initial_num| {
-        var num = initial_num;
-        var outputs = std.ArrayList(usize).init(allocator);
-        defer outputs.deinit();
-
-        for (0..2000) |_| {
-            num = nextNum(num);
-            try outputs.append(num % 10);
-        }
-
-        var seen = std.AutoHashMap([4]i64, void).init(allocator);
-        defer seen.deinit();
-
-        if (outputs.items.len < 5) continue;
-
-        for (4..outputs.items.len) |i| {
-            var seq: [4]i64 = undefined;
-            for (0..4) |j| {
-                const curr = @as(i64, @intCast(outputs.items[i - j]));
-                const prev = @as(i64, @intCast(outputs.items[i - j - 1]));
-                seq[3 - j] = curr - prev;
-            }
-
-            const gop = try seen.getOrPut(seq);
-            if (gop.found_existing) continue;
-
-            const n = outputs.items[i];
-            const entry = try seq_totals.getOrPut(seq);
-            if (entry.found_existing) {
-                entry.value_ptr.* += n;
-            } else {
-                entry.value_ptr.* = n;
-            }
-        }
-    }
-
-    var max_total: usize = 0;
-    var iter = seq_totals.iterator();
-    while (iter.next()) |entry| {
-        if (entry.value_ptr.* > max_total) {
-            max_total = entry.value_ptr.*;
-        }
-    }
-
-    print("Max bananas: {}\n", .{max_total});
+    print("Number of tri-groups with at least one 't': {}\n", .{triangles.items.len});
 }
