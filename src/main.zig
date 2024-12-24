@@ -1,12 +1,12 @@
 const std = @import("std");
 const print = std.debug.print;
 
-fn mix(secret: usize, result: usize) usize {
-    return secret ^ result;
-}
-
-fn prune(secret: usize) usize {
-    return @mod(secret, 16777216);
+fn nextNum(x: usize) usize {
+    var result = x;
+    result ^= (result * 64) % 16777216;
+    result ^= (result / 32) % 16777216;
+    result ^= (result * 2048) % 16777216;
+    return result;
 }
 
 pub fn main() !void {
@@ -18,23 +18,59 @@ pub fn main() !void {
     defer nums.deinit();
 
     const input = @embedFile("input.txt");
-    var iter = std.mem.splitScalar(u8, input, '\n');
-    while (iter.next()) |line| {
+    var input_iter = std.mem.splitScalar(u8, input, '\n');
+    while (input_iter.next()) |line| {
         if (line.len < 1) continue;
 
         try nums.append(try std.fmt.parseInt(usize, std.mem.trim(u8, line, "\n"), 10));
     }
 
-    var sum: usize = 0;
-    for (nums.items) |*num| {
+    var seq_totals = std.AutoHashMap([4]i64, usize).init(allocator);
+    defer seq_totals.deinit();
+
+    for (nums.items) |initial_num| {
+        var num = initial_num;
+        var outputs = std.ArrayList(usize).init(allocator);
+        defer outputs.deinit();
+
         for (0..2000) |_| {
-            num.* = prune(mix(num.*, num.* * 64));
-            num.* = prune(mix(num.*, @divFloor(num.*, 32)));
-            num.* = prune(mix(num.*, num.* * 2048));
+            num = nextNum(num);
+            try outputs.append(num % 10);
         }
 
-        sum += num.*;
+        var seen = std.AutoHashMap([4]i64, void).init(allocator);
+        defer seen.deinit();
+
+        if (outputs.items.len < 5) continue;
+
+        for (4..outputs.items.len) |i| {
+            var seq: [4]i64 = undefined;
+            for (0..4) |j| {
+                const curr = @as(i64, @intCast(outputs.items[i - j]));
+                const prev = @as(i64, @intCast(outputs.items[i - j - 1]));
+                seq[3 - j] = curr - prev;
+            }
+
+            const gop = try seen.getOrPut(seq);
+            if (gop.found_existing) continue;
+
+            const n = outputs.items[i];
+            const entry = try seq_totals.getOrPut(seq);
+            if (entry.found_existing) {
+                entry.value_ptr.* += n;
+            } else {
+                entry.value_ptr.* = n;
+            }
+        }
     }
 
-    print("Sum: {}\n", .{sum});
+    var max_total: usize = 0;
+    var iter = seq_totals.iterator();
+    while (iter.next()) |entry| {
+        if (entry.value_ptr.* > max_total) {
+            max_total = entry.value_ptr.*;
+        }
+    }
+
+    print("Max bananas: {}\n", .{max_total});
 }
