@@ -117,6 +117,74 @@ pub fn parseInput(allocator: std.mem.Allocator, input: []const u8) !NetworkGraph
     return graph;
 }
 
+fn isValidGroup(
+    self: *const NetworkGraph,
+    current_group: *std.ArrayList([]const u8),
+    candidate: []const u8,
+) bool {
+    for (current_group.items) |item| {
+        if (!self.areConnected(item, candidate)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn findGroup(
+    self: *const NetworkGraph,
+    node: []const u8,
+    current_group: *std.ArrayList([]const u8),
+    visited: *std.StringHashMap(bool),
+) !void {
+    if (visited.contains(node)) return;
+    try current_group.append(node);
+    try visited.put(node, true);
+
+    if (self.connections.get(node)) |neighbors| {
+        var it = neighbors.iterator();
+        while (it.next()) |neighbor| {
+            if (isValidGroup(self, current_group, neighbor.key_ptr.*)) {
+                try findGroup(self, neighbor.key_ptr.*, current_group, visited);
+            }
+        }
+    }
+}
+
+fn less(_: void, lhs: []const u8, rhs: []const u8) bool {
+    return std.mem.lessThan(u8, lhs, rhs);
+}
+
+pub fn findLargestGroup(self: *const NetworkGraph) ![]u8 {
+    var largest_group = std.ArrayList([]const u8).init(self.allocator);
+    defer largest_group.deinit();
+
+    var current_group = std.ArrayList([]const u8).init(self.allocator);
+    defer current_group.deinit();
+
+    var visited = std.StringHashMap(bool).init(self.allocator);
+    defer visited.deinit();
+
+    var it = self.connections.iterator();
+    while (it.next()) |entry| {
+        const node = entry.key_ptr.*;
+        if (!visited.contains(node)) {
+            try findGroup(self, node, &current_group, &visited);
+
+            if (current_group.items.len > largest_group.items.len) {
+                largest_group.clearAndFree();
+                for (current_group.items) |item| {
+                    try largest_group.append(item);
+                }
+            }
+        }
+        current_group.clearAndFree();
+    }
+
+    std.mem.sort([]const u8, largest_group.items, {}, less);
+
+    return try std.mem.join(self.allocator, ",", largest_group.items);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -126,11 +194,8 @@ pub fn main() !void {
     var net_graph = try parseInput(allocator, input);
     defer net_graph.deinit();
 
-    var triangles = try net_graph.findTrianglesWithT();
-    defer {
-        for (triangles.items) |t| allocator.free(t);
-        triangles.deinit();
-    }
+    const group = try findLargestGroup(&net_graph);
+    defer allocator.free(group);
 
-    print("Number of tri-groups with at least one 't': {}\n", .{triangles.items.len});
+    print("Largest group: {s}\n", .{group});
 }
